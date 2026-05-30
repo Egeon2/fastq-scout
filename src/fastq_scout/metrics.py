@@ -45,7 +45,7 @@ class PerPositionQuality(BaseMetric):
             mean.append(round(s / c, 2) if c > 0 else 0.0)
 
         return {
-            "pre_position_mean": mean,
+            "per_position_mean": mean,
             "overall_mean": round(sum(self._quality_sum) / sum(self._count), 2) if sum(self._count) > 0 else 0.0
         }
 
