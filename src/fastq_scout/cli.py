@@ -1,11 +1,21 @@
 import argparse
 import json
+import shutil
+import tempfile
 from pathlib import Path
 
 from fastq_scout.metrics import PerPositionQuality, LengthDistribution, GCContent, DuplicateRate
 from fastq_scout.pipeline import Pipeline
-from fastq_scout.plot import MetricPlotter
 from fastq_scout.reader import FastqReader
+from fastq_scout.report import HtmlReport, build_plot_paths
+from fastq_scout.scout import FastqScout
+
+
+VERDICT_EXIT_CODES = {
+    "PROCEED": 0,
+    "TRIM": 1,
+    "REJECT": 2,
+}
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -21,7 +31,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "-o", "--output",
         type=Path,
-        help="Path for JSON report (default: <input_stem>_scout.json next to input file)",
+        help="Path for HTML report (default: <input_stem>_scout.html next to input file)",
+    )
+    parser.add_argument(
+        "--json",
+        type=Path,
+        help="Optional path for JSON metrics export",
     )
     parser.add_argument(
         "-c", "--chunk-size",
@@ -32,7 +47,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--plot-dir",
         type=Path,
-        help="Directory for PNG plots (skip plotting if omitted)",
+        help="Keep PNG plots in this directory (plots are also embedded in HTML)",
     )
     return parser
 
@@ -46,7 +61,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.chunk_size <= 0:
         raise SystemExit("Error: --chunk-size must be a positive integer")
 
-    output_path = args.output or args.fastq.with_name(f"{args.fastq.stem}_scout.json")
+    html_path = args.output or args.fastq.with_name(f"{args.fastq.stem}_scout.html")
 
     reader = FastqReader(args.fastq, chunk_size=args.chunk_size)
     pipeline = Pipeline(metrics=[
@@ -59,23 +74,38 @@ def main(argv: list[str] | None = None) -> int:
     print("Start processing...")
     results = pipeline.run(reader)
 
-    print("\n--- Processing Results ---")
-    for metric_name, data in results.items():
-        print(f"\n{metric_name}:")
-        print(data)
+    scout = FastqScout()
+    verdict, scout_report = scout.result(results)
 
-    if args.plot_dir:
-        print(f"\n--- Plotting Results ({args.plot_dir}) ---")
-        for metric_name, data in results.items():
-            plot_path = MetricPlotter(metric_name, data).plot(args.plot_dir)
-            print(f"  {plot_path}")
+    with tempfile.TemporaryDirectory(prefix="fastq_scout_") as temp_dir:
+        plot_paths = build_plot_paths(results, Path(temp_dir))
 
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(output_path, "w", encoding="utf-8") as f:
-        json.dump(results, f, indent=2)
+        if args.plot_dir:
+            args.plot_dir.mkdir(parents=True, exist_ok=True)
+            saved_plots = {}
+            for title, plot_path in plot_paths.items():
+                target = args.plot_dir / plot_path.name
+                shutil.copy2(plot_path, target)
+                saved_plots[title] = target
+            plot_paths = saved_plots
 
-    print(f"\nResults saved to {output_path}")
-    return 0
+        HtmlReport(args.fastq, results, scout_report, plot_paths).save(html_path)
+
+    if args.json:
+        args.json.parent.mkdir(parents=True, exist_ok=True)
+        with open(args.json, "w", encoding="utf-8") as f:
+            json.dump(
+                {
+                    "metrics": results,
+                    "scout": scout_report,
+                },
+                f,
+                indent=2,
+            )
+        print(f"JSON saved to {args.json}")
+
+    print(f"HTML report saved to {html_path}")
+    return VERDICT_EXIT_CODES.get(verdict, 0)
 
 
 if __name__ == "__main__":

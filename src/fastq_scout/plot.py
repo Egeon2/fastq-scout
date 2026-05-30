@@ -12,7 +12,7 @@ class MetricPlotter:
         plt.figure(figsize=(10, 6))
 
         if self.metric_name == "Per position quality":
-            plt.plot(self.data["pre_position_mean"], color='#2ecc71', linewidth=2)
+            plt.plot(self.data["per_position_mean"], color='#2ecc71', linewidth=2)
             plt.title("Per Position Mean Quality", fontsize=14)
             plt.xlabel("Position in Read")
             plt.ylabel("PHRED Score")
