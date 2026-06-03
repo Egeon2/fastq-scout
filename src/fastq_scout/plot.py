@@ -1,6 +1,29 @@
+import math
 from pathlib import Path
 
 import matplotlib.pyplot as plt
+
+
+def _smooth(values: list[int | float], window: int = 2) -> list[float]:
+    smoothed = []
+    for i in range(len(values)):
+        start = max(0, i - window)
+        end = min(len(values), i + window + 1)
+        smoothed.append(sum(values[start:end]) / (end - start))
+    return smoothed
+
+
+def _theoretical_gc_curve(mean_gc: float, std_gc: float, total_reads: int, bins: list[int]) -> list[float]:
+    if std_gc <= 0 or total_reads == 0:
+        return [0.0] * len(bins)
+
+    curve = []
+    for x in bins:
+        exponent = -0.5 * ((x - mean_gc) / std_gc) ** 2
+        pdf = math.exp(exponent) / (std_gc * math.sqrt(2 * math.pi))
+        curve.append(pdf * total_reads)
+    return curve
+
 
 class MetricPlotter:
     def __init__(self, metric_name, data):
@@ -32,11 +55,33 @@ class MetricPlotter:
         elif self.metric_name == "GC content":
             bins = list(range(101))
             counts = self.data["gc_histogram"]
-            plt.bar(bins, counts, color='#e67e22', width=1.0)
-            plt.title("GC Content Distribution", fontsize=14)
-            plt.xlabel("GC %")
-            plt.ylabel("Number of Reads")
+            total_reads = sum(counts)
+            mean_gc = self.data["mean_gc"]
+            std_gc = self.data["std_gc"]
+            observed = _smooth(counts)
+            theoretical = _theoretical_gc_curve(mean_gc, std_gc, total_reads, bins)
+
+            plt.plot(bins, observed, color='#e74c3c', linewidth=2, label='GC distribution')
+            plt.plot(bins, theoretical, color='#3498db', linewidth=2, label='Theoretical distribution')
+            plt.title("Per Sequence GC Content", fontsize=14)
+            plt.xlabel("% GC")
+            plt.ylabel("Count")
+            plt.legend(loc='upper right')
+            plt.grid(True, linestyle='--', alpha=0.7)
             output_path = output_dir / "gc_content.png"
+
+        elif self.metric_name == "Per base sequence content":
+            positions = list(range(1, len(self.data["A"]) + 1))
+            plt.plot(positions, self.data["A"], color='#27ae60', linewidth=1.5, label='A')
+            plt.plot(positions, self.data["C"], color='#3498db', linewidth=1.5, label='C')
+            plt.plot(positions, self.data["T"], color='#e74c3c', linewidth=1.5, label='T')
+            plt.plot(positions, self.data["G"], color='#2c3e50', linewidth=1.5, label='G')
+            plt.title("Per Base Sequence Content", fontsize=14)
+            plt.xlabel("Position in Read")
+            plt.ylabel("% Sequence Content")
+            plt.legend(loc='upper right')
+            plt.grid(True, linestyle='--', alpha=0.7)
+            output_path = output_dir / "per_base_sequence_content.png"
 
         elif self.metric_name == "Duplicates rate":
             labels = ['Duplicates', 'Unique']

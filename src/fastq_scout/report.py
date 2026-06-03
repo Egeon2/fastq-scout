@@ -291,6 +291,7 @@ def build_plot_paths(metrics: dict, output_dir: Path) -> dict[str, Path]:
         "Per position quality": "Per position quality",
         "Length distribution": "Length distribution",
         "GC content": "GC content",
+        "Per base sequence content": "Per base sequence content",
         "Duplicates rate": "Duplicate rate",
     }
 

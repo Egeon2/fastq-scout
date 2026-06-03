@@ -79,7 +79,6 @@ class GCContent(BaseMetric):
     def __init__(self):
         self._gc_bins = [0] * 101
         self._total_reads = 0
-        self._gc_sum = 0.0
 
     @property
     def name(self):
@@ -90,14 +89,66 @@ class GCContent(BaseMetric):
             bin_idx = round(read.gc_content * 100)
             self._gc_bins[bin_idx] += 1
             self._total_reads += 1
-            self._gc_sum += read.gc_content
 
     def result(self):
-        mean_gc = round(self._gc_sum / self._total_reads * 100, 2) if self._total_reads else 0.0
+        if self._total_reads == 0:
+            return {
+                "mean_gc": 0.0,
+                "std_gc": 0.0,
+                "gc_histogram": self._gc_bins,
+            }
+
+        mean_gc = sum(i * count for i, count in enumerate(self._gc_bins)) / self._total_reads
+        variance = sum((i - mean_gc) ** 2 * count for i, count in enumerate(self._gc_bins)) / self._total_reads
+        std_gc = variance ** 0.5
+
         return {
-            "mean_gc": mean_gc,
-            "gc_histogram": self._gc_bins
+            "mean_gc": round(mean_gc, 2),
+            "std_gc": round(std_gc, 2),
+            "gc_histogram": self._gc_bins,
         }
+
+class PerBaseSequenceContent(BaseMetric):
+    _BASE_INDEX = {"A": 0, "C": 1, "G": 2, "T": 3}
+
+    def __init__(self):
+        self._base_counts = []
+        self._position_count = []
+
+    @property
+    def name(self):
+        return "Per base sequence content"
+
+    def update(self, chunk):
+        for read in chunk:
+            seq = read.sequence.upper()
+
+            if len(seq) > len(self._base_counts):
+                extra = len(seq) - len(self._base_counts)
+                for _ in range(extra):
+                    self._base_counts.append([0, 0, 0, 0])
+                    self._position_count.append(0)
+
+            for i, base in enumerate(seq):
+                base_idx = self._BASE_INDEX.get(base)
+                if base_idx is not None:
+                    self._base_counts[i][base_idx] += 1
+                self._position_count[i] += 1
+
+    def result(self):
+        content = {"A": [], "C": [], "G": [], "T": []}
+
+        for counts, total in zip(self._base_counts, self._position_count):
+            if total == 0:
+                for base in content:
+                    content[base].append(0.0)
+            else:
+                content["A"].append(round(counts[0] / total * 100, 2))
+                content["C"].append(round(counts[1] / total * 100, 2))
+                content["G"].append(round(counts[2] / total * 100, 2))
+                content["T"].append(round(counts[3] / total * 100, 2))
+
+        return content
 
 class DuplicateRate(BaseMetric):
     def __init__(self):

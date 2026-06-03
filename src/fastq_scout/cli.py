@@ -4,7 +4,13 @@ import shutil
 import tempfile
 from pathlib import Path
 
-from fastq_scout.metrics import PerPositionQuality, LengthDistribution, GCContent, DuplicateRate
+from fastq_scout.metrics import (
+    PerPositionQuality,
+    LengthDistribution,
+    GCContent,
+    PerBaseSequenceContent,
+    DuplicateRate,
+)
 from fastq_scout.pipeline import Pipeline
 from fastq_scout.reader import FastqReader
 from fastq_scout.report import HtmlReport, build_plot_paths
@@ -68,6 +74,7 @@ def main(argv: list[str] | None = None) -> int:
         PerPositionQuality(),
         LengthDistribution(),
         GCContent(),
+        PerBaseSequenceContent(),
         DuplicateRate(),
     ])
 
