@@ -89,6 +89,16 @@ class MetricPlotter:
             plt.pie(vals, labels=labels, autopct='%1.1f%%', colors=['#e74c3c', '#95a5a6'], startangle=140)
             plt.title("Duplicate Rate Overview", fontsize=14)
             output_path = output_dir / "duplicate_rate.png"
+        
+        elif self.metric_name == "Per sequence quality scores":
+            bins = list(range(41))
+            counts = self.data["histogram"]
+            plt.bar(bins, counts, color='#27ae60', alpha=0.85, width=1.0)
+            plt.title("Per Sequence Quality Scores", fontsize=14)
+            plt.xlabel("Mean PHRED Score")
+            plt.ylabel("Number of Reads")
+            plt.grid(True, linestyle='--', alpha=0.7)
+            output_path = output_dir / "per_sequence_quality_scores.png"
 
         else:
             plt.close()

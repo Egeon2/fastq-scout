@@ -1,5 +1,6 @@
 from abc import ABC, abstractmethod
 
+
 class BaseMetric(ABC):
 
     @property
@@ -47,6 +48,34 @@ class PerPositionQuality(BaseMetric):
         return {
             "per_position_mean": mean,
             "overall_mean": round(sum(self._quality_sum) / sum(self._count), 2) if sum(self._count) > 0 else 0.0
+        }
+
+class PerSequenceQuality(BaseMetric):
+    def __init__(self):
+        self._quality_bins = [0] * 41
+        self._total_reads = 0
+
+    @property
+    def name(self):
+        return "Per sequence quality scores"
+
+    def update(self, chunk):
+        for read in chunk:
+            bin_idx = min(max(0, round(read.mean_quality)), 40)
+            self._quality_bins[bin_idx] += 1
+            self._total_reads += 1
+
+    def result(self):
+        if self._total_reads == 0:
+            return {"histogram": self._quality_bins, "q20_pct": 0.0, "q30_pct": 0.0}
+
+        reads_q20_plus = sum(self._quality_bins[20:])
+        reads_q30_plus = sum(self._quality_bins[30:])
+
+        return {
+            "histogram": self._quality_bins,
+            "q20_pct": round(reads_q20_plus / self._total_reads * 100, 2),
+            "q30_pct": round(reads_q30_plus / self._total_reads * 100, 2),
         }
 
 class LengthDistribution(BaseMetric):

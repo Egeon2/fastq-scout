@@ -32,10 +32,13 @@ class HtmlReport:
         )
 
         quality = self.metrics.get("Per position quality", {})
+        seq_quality = self.metrics.get("Per sequence quality scores", {})
         length = self.metrics.get("Length distribution", {})
         gc = self.metrics.get("GC content", {})
         duplicates = self.metrics.get("Duplicates rate", 0)
         mean_gc = gc.get("mean_gc", 0)
+        q20_pct = seq_quality.get("q20_pct", "—")
+        q30_pct = seq_quality.get("q30_pct", "—")
 
         issues = self.scout_report.get("issues", [])
         recommendations = self.scout_report.get("recommendations", [])
@@ -189,6 +192,14 @@ class HtmlReport:
                 <div class="card-value">{quality.get("overall_mean", "—")}</div>
             </div>
             <div class="card">
+                <div class="card-label">Q20 rate</div>
+                <div class="card-value">{self._format_pct(q20_pct)}</div>
+            </div>
+            <div class="card">
+                <div class="card-label">Q30 rate</div>
+                <div class="card-value">{self._format_pct(q30_pct)}</div>
+            </div>
+            <div class="card">
                 <div class="card-label">Mean read length</div>
                 <div class="card-value">{length.get("mean_length", "—")}</div>
             </div>
@@ -250,6 +261,11 @@ class HtmlReport:
             return "—"
         return f"{duplicates}%"
 
+    def _format_pct(self, value) -> str:
+        if value == "—":
+            return "—"
+        return f"{value}%"
+
     def _list_block(self, items: list[str], empty_text: str) -> str:
         if not items:
             return f'<p class="empty">{html.escape(empty_text)}</p>'
@@ -278,6 +294,10 @@ class HtmlReport:
                 summary[name] = {
                     key: value for key, value in data.items() if key != "distribution"
                 }
+            elif name == "Per sequence quality scores" and isinstance(data, dict):
+                summary[name] = {
+                    key: value for key, value in data.items() if key != "histogram"
+                }
             else:
                 summary[name] = data
         summary["scout"] = self.scout_report
@@ -289,6 +309,7 @@ def build_plot_paths(metrics: dict, output_dir: Path) -> dict[str, Path]:
 
     plot_titles = {
         "Per position quality": "Per position quality",
+        "Per sequence quality scores": "Per sequence quality scores",
         "Length distribution": "Length distribution",
         "GC content": "GC content",
         "Per base sequence content": "Per base sequence content",

@@ -10,6 +10,7 @@ from fastq_scout.metrics import (
     GCContent,
     PerBaseSequenceContent,
     DuplicateRate,
+    PerSequenceQuality,
 )
 from fastq_scout.pipeline import Pipeline
 from fastq_scout.reader import FastqReader
@@ -72,6 +73,7 @@ def main(argv: list[str] | None = None) -> int:
     reader = FastqReader(args.fastq, chunk_size=args.chunk_size)
     pipeline = Pipeline(metrics=[
         PerPositionQuality(),
+        PerSequenceQuality(),
         LengthDistribution(),
         GCContent(),
         PerBaseSequenceContent(),
