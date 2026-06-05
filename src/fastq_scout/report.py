@@ -21,12 +21,16 @@ class HtmlReport:
         scout_report: dict,
         plot_paths: dict[str, Path],
         sample_plan: dict | None = None,
+        fastq_r2: Path | None = None,
+        r2_metrics: dict | None = None,
     ):
         self.fastq_path = fastq_path
         self.metrics = metrics
         self.scout_report = scout_report
         self.plot_paths = plot_paths
         self.sample_plan = sample_plan or {}
+        self.fastq_r2 = fastq_r2
+        self.r2_metrics = r2_metrics or {}
 
     def save(self, output_path: Path) -> Path:
         output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -49,7 +53,8 @@ class HtmlReport:
         q30_pct = seq_quality.get("q30_pct", "—")
         adapter = self.metrics.get("Adapter discovery", {})
         adapter_pct = adapter.get("adapter_content_pct", "—")
-        adapter_consensus = adapter.get("consensus", "")
+        adapter_trim = adapter.get("trim_sequence") or adapter.get("consensus", "")
+        adapter_reference = adapter.get("reference_name", "")
 
         issues = self.scout_report.get("issues", [])
         recommendations = self.scout_report.get("recommendations", [])
@@ -57,6 +62,8 @@ class HtmlReport:
         generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
         sampling_section = self._sampling_section()
         adapter_section = self._adapter_section(adapter)
+        r2_section = self._r2_summary_section()
+        run_meta = self._run_meta_lines()
 
         return f"""<!DOCTYPE html>
 <html lang="en">
@@ -190,6 +197,7 @@ class HtmlReport:
         <header>
             <h1>FastqScout Report</h1>
             <p>Input: <strong>{html.escape(str(self.fastq_path))}</strong></p>
+            {run_meta}
             <p>Generated: {generated_at}</p>
         </header>
 
@@ -230,10 +238,12 @@ class HtmlReport:
                 <div class="card-label">Duplicate rate</div>
                 <div class="card-value">{self._format_duplicate(duplicates)}</div>
             </div>
-            {self._adapter_cards(adapter_pct, adapter_consensus)}
+            {self._adapter_cards(adapter, adapter_pct, adapter_trim, adapter_reference)}
         </div>
 
         {adapter_section}
+
+        {r2_section}
 
         <section>
             <h2>Issues</h2>
@@ -284,21 +294,96 @@ class HtmlReport:
             return "—"
         return f"{value}%"
 
-    def _adapter_cards(self, adapter_pct, adapter_consensus: str) -> str:
-        if adapter_pct == "—" and not adapter_consensus:
+    def _adapter_cards(
+        self,
+        adapter: dict,
+        adapter_pct,
+        adapter_trim: str,
+        adapter_reference: str,
+    ) -> str:
+        if adapter_pct == "—" and not adapter_trim:
             return ""
-        consensus_value = adapter_consensus[:24] + "..." if len(adapter_consensus) > 24 else adapter_consensus
-        if not consensus_value:
-            consensus_value = "—"
+
+        trim_value = adapter_trim[:28] + "..." if len(adapter_trim) > 28 else adapter_trim
+        if not trim_value:
+            trim_value = "—"
+
+        method = adapter.get("detection_method", "none")
+        method_label = {
+            "reference": "Reference match",
+            "de_novo": "De novo fallback",
+            "none": "—",
+        }.get(method, method)
+
+        reference_value = adapter_reference or "—"
+        identity = adapter.get("identity_pct", 0)
+        identity_value = f"{identity}%" if identity else "—"
+
         return f"""
             <div class="card">
                 <div class="card-label">Adapter content</div>
                 <div class="card-value">{self._format_pct(adapter_pct)}</div>
             </div>
             <div class="card">
-                <div class="card-label">Adapter consensus</div>
-                <div class="card-value" style="font-size:1rem;">{html.escape(consensus_value)}</div>
+                <div class="card-label">Matched reference</div>
+                <div class="card-value" style="font-size:1rem;">{html.escape(reference_value)}</div>
+            </div>
+            <div class="card">
+                <div class="card-label">fastp trim sequence</div>
+                <div class="card-value" style="font-size:1rem;">{html.escape(trim_value)}</div>
+            </div>
+            <div class="card">
+                <div class="card-label">Detection / identity</div>
+                <div class="card-value" style="font-size:1rem;">{html.escape(method_label)} / {identity_value}</div>
             </div>"""
+
+    def _run_meta_lines(self) -> str:
+        layout = self.sample_plan.get("layout") or self.scout_report.get("layout", "single")
+        library_type = self.sample_plan.get("library_type") or self.scout_report.get(
+            "library_type", "genome"
+        )
+        lines = [
+            f"<p>Layout: <strong>{html.escape(layout)}</strong> | "
+            f"Library: <strong>{html.escape(library_type)}</strong></p>"
+        ]
+        if self.fastq_r2 is not None:
+            lines.append(f"<p>R2: <strong>{html.escape(str(self.fastq_r2))}</strong></p>")
+        return "\n".join(lines)
+
+    def _r2_summary_section(self) -> str:
+        if not self.r2_metrics:
+            return ""
+
+        quality = self.r2_metrics.get("Per position quality", {})
+        adapter = self.r2_metrics.get("Adapter discovery", {})
+        duplicates = self.r2_metrics.get("Duplicates rate", 0)
+        adapter_pct = adapter.get("adapter_content_pct", "—")
+        adapter_trim = adapter.get("trim_sequence") or adapter.get("consensus", "")
+        adapter_reference = adapter.get("reference_name", "—")
+
+        return f"""
+        <section>
+            <h2>R2 summary</h2>
+            <div class="grid">
+                <div class="card">
+                    <div class="card-label">R2 mean quality</div>
+                    <div class="card-value">{quality.get("overall_mean", "—")}</div>
+                </div>
+                <div class="card">
+                    <div class="card-label">R2 duplicate rate</div>
+                    <div class="card-value">{duplicates}%</div>
+                </div>
+                <div class="card">
+                    <div class="card-label">R2 adapter content</div>
+                    <div class="card-value">{self._format_pct(adapter_pct)}</div>
+                </div>
+                <div class="card">
+                    <div class="card-label">R2 fastp sequence</div>
+                    <div class="card-value" style="font-size:1rem;">{html.escape(adapter_trim or "—")}</div>
+                </div>
+            </div>
+            <p>Matched reference: {html.escape(adapter_reference)}</p>
+        </section>"""
 
     def _adapter_section(self, adapter: dict) -> str:
         if not adapter:
@@ -308,14 +393,31 @@ class HtmlReport:
         if not candidates and not adapter.get("consensus"):
             return ""
 
+        method = adapter.get("detection_method", "none")
+        if method == "reference":
+            intro = (
+                "Matched read tails against known adapter references. "
+                "Trim sequence is the shortest motif suitable for fastp."
+            )
+        elif method == "de_novo":
+            intro = (
+                "No known reference matched; short de novo motif from enriched tail k-mers."
+            )
+        else:
+            intro = "Analyzed read tails for adapter signal."
+
         rows = []
         for candidate in candidates:
+            ref_name = candidate.get("reference_name") or "Unknown"
+            trim_seq = candidate.get("trim_sequence") or candidate.get("sequence", "")
+            identity = candidate.get("identity_pct", 0)
+            identity_label = f"{identity}%" if identity else "—"
             rows.append(
                 "<tr>"
-                f"<td>{html.escape(candidate.get('sequence', ''))}</td>"
+                f"<td>{html.escape(ref_name)}</td>"
+                f"<td>{html.escape(trim_seq)}</td>"
                 f"<td>{candidate.get('reads_pct', 0)}%</td>"
-                f"<td>{candidate.get('enrichment', '—')}×</td>"
-                f"<td>{candidate.get('tail_count', '—')}</td>"
+                f"<td>{identity_label}</td>"
                 "</tr>"
             )
 
@@ -326,14 +428,14 @@ class HtmlReport:
         return f"""
         <section>
             <h2>Adapter discovery</h2>
-            <p>Analyzed read tails from {adapter.get('reads_analyzed', 0):,} reads.</p>
+            <p>{intro} Analyzed {adapter.get('reads_analyzed', 0):,} read tails.</p>
             <table style="width:100%; border-collapse: collapse;">
                 <thead>
                     <tr>
-                        <th align="left">Sequence</th>
+                        <th align="left">Reference</th>
+                        <th align="left">fastp sequence</th>
                         <th align="left">Reads matched</th>
-                        <th align="left">Enrichment</th>
-                        <th align="left">Tail k-mer count</th>
+                        <th align="left">Identity</th>
                     </tr>
                 </thead>
                 <tbody>{table_rows}</tbody>
@@ -344,7 +446,15 @@ class HtmlReport:
         if not self.sample_plan:
             return ""
 
-        plan = self.sample_plan
+        if "R1" in self.sample_plan and "R2" in self.sample_plan:
+            blocks = []
+            for label in ("R1", "R2"):
+                blocks.append(self._sampling_block(self.sample_plan[label], label))
+            return "\n".join(blocks)
+
+        return self._sampling_block(self.sample_plan, self.sample_plan.get("read_label", "R1"))
+
+    def _sampling_block(self, plan: dict, title: str) -> str:
         total_reads = plan.get("total_reads")
         sample_budget = plan.get("sample_budget")
         if total_reads is None or sample_budget is None:
@@ -353,6 +463,9 @@ class HtmlReport:
         reads_processed = plan.get("reads_processed", sample_budget)
         mode = plan.get("mode", "auto")
         rows = [
+            ("File", plan.get("fastq", "—")),
+            ("Layout", plan.get("layout", self.sample_plan.get("layout", "—"))),
+            ("Library type", plan.get("library_type", self.sample_plan.get("library_type", "—"))),
             ("Mode", mode),
             ("Total reads in file", f"{total_reads:,}"),
             ("Reads analyzed", f"{reads_processed:,}"),
@@ -386,7 +499,7 @@ class HtmlReport:
 
         return f"""
         <section>
-            <h2>Sampling</h2>
+            <h2>Sampling — {html.escape(title)}</h2>
             <table style="width:100%; border-collapse: collapse;">
                 <tbody>{table_rows}</tbody>
             </table>
@@ -436,7 +549,11 @@ class HtmlReport:
         return summary
 
 
-def build_plot_paths(metrics: dict, output_dir: Path) -> dict[str, Path]:
+def build_plot_paths(
+    metrics: dict,
+    output_dir: Path,
+    name_suffix: str = "",
+) -> dict[str, Path]:
     from fastq_scout.plot import MetricPlotter
 
     plot_titles = {
@@ -452,6 +569,10 @@ def build_plot_paths(metrics: dict, output_dir: Path) -> dict[str, Path]:
     plot_paths = {}
     for metric_name, data in metrics.items():
         plot_path = MetricPlotter(metric_name, data).plot(output_dir)
+        if name_suffix:
+            renamed = plot_path.with_name(f"{plot_path.stem}{name_suffix}{plot_path.suffix}")
+            plot_path.rename(renamed)
+            plot_path = renamed
         plot_paths[plot_titles.get(metric_name, metric_name)] = plot_path
 
     return plot_paths

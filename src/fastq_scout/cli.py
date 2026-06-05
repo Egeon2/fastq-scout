@@ -14,6 +14,8 @@ from fastq_scout.metrics import (
     AdapterDiscovery,
 )
 from fastq_scout.pipeline import Pipeline
+from fastq_scout.profiles import effective_min_reads
+from fastq_scout.run_context import RunContext, build_context
 from fastq_scout.reader import FastqReader
 from fastq_scout.report import HtmlReport, build_plot_paths
 from fastq_scout.sampling import count_fastq_reads, resolve_sample_budget
@@ -35,7 +37,25 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "fastq",
         type=Path,
-        help="Path to input FASTQ file",
+        help="Path to R1 FASTQ file (or single-end FASTQ)",
+    )
+    parser.add_argument(
+        "fastq_r2",
+        type=Path,
+        nargs="?",
+        help="R2 FASTQ (required when --layout paired)",
+    )
+    parser.add_argument(
+        "--layout",
+        choices=["single", "paired"],
+        default="single",
+        help="Read layout (default: single)",
+    )
+    parser.add_argument(
+        "--library-type",
+        choices=["genome", "transcriptome"],
+        default="genome",
+        help="Library type (default: genome)",
     )
     parser.add_argument(
         "-o", "--output",
@@ -78,7 +98,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--min-reads",
         type=int,
         default=10_000,
-        help="Minimum reads for auto sampling (default: 100000)",
+        help="Minimum reads for auto sampling (default: 10000)",
     )
     parser.add_argument(
         "--margin-rate",
@@ -101,11 +121,31 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _build_sample_plan(args: argparse.Namespace) -> tuple[dict, int | None]:
-    total_reads = count_fastq_reads(args.fastq)
+def _build_metrics(mode: str, read_label: str) -> list:
+    metrics = [
+        PerPositionQuality(),
+        PerSequenceQuality(),
+        LengthDistribution(),
+        GCContent(),
+        PerBaseSequenceContent(),
+        DuplicateRate(),
+    ]
+    if mode == "with_adapter":
+        adapter_set = "universal" if read_label == "R1" else "read2"
+        metrics.append(AdapterDiscovery(adapter_set=adapter_set))
+    return metrics
+
+
+def _build_sample_plan(
+    args: argparse.Namespace,
+    ctx: RunContext,
+    fastq: Path,
+) -> tuple[dict, int | None]:
+    total_reads = count_fastq_reads(fastq)
+    min_reads = effective_min_reads(ctx, args.min_reads)
 
     if args.full_file:
-        return {
+        plan = {
             "total_reads": total_reads,
             "sample_budget": total_reads,
             "sample_budget_base": total_reads,
@@ -113,13 +153,14 @@ def _build_sample_plan(args: argparse.Namespace) -> tuple[dict, int | None]:
             "sample_fraction_pct": 100.0 if total_reads else 0.0,
             "sample_fraction_pct_for_adapters": 100.0 if total_reads else 0.0,
             "mode": "full",
-        }, None
+        }
+        return plan, None
 
     if args.max_reads is not None:
         if args.max_reads <= 0:
             raise SystemExit("Error: --max-reads must be a positive integer")
         sample_budget = min(args.max_reads, total_reads)
-        return {
+        plan = {
             "total_reads": total_reads,
             "sample_budget": sample_budget,
             "sample_budget_base": sample_budget,
@@ -127,17 +168,43 @@ def _build_sample_plan(args: argparse.Namespace) -> tuple[dict, int | None]:
             "sample_fraction_pct": round(sample_budget / total_reads * 100, 2) if total_reads else 0.0,
             "sample_fraction_pct_for_adapters": round(sample_budget / total_reads * 100, 2) if total_reads else 0.0,
             "mode": "max_reads",
-        }, sample_budget
+        }
+        return plan, sample_budget
 
-    sample_plan = resolve_sample_budget(
+    plan = resolve_sample_budget(
         total_reads,
         margin_rate=args.margin_rate,
         margin_mean=args.margin_mean,
-        min_reads=args.min_reads,
+        min_reads=min_reads,
         max_fraction=args.max_fraction,
         mode=args.mode,
     )
-    return sample_plan, sample_plan["sample_budget"]
+    return plan, plan["sample_budget"]
+
+
+def _annotate_sample_plan(plan: dict, ctx: RunContext, fastq: Path, read_label: str) -> dict:
+    annotated = dict(plan)
+    annotated["layout"] = ctx.layout
+    annotated["library_type"] = ctx.library_type
+    annotated["read_label"] = read_label
+    annotated["fastq"] = str(fastq)
+    return annotated
+
+
+def _run_fastq(
+    fastq: Path,
+    read_label: str,
+    args: argparse.Namespace,
+    ctx: RunContext,
+    sample_plan: dict,
+    sample_budget: int | None,
+) -> tuple[dict, int, dict]:
+    reader = FastqReader(fastq, chunk_size=args.chunk_size, sample_budget=sample_budget)
+    pipeline = Pipeline(metrics=_build_metrics(args.mode, read_label))
+    results = pipeline.run(reader)
+    plan = _annotate_sample_plan(sample_plan, ctx, fastq, read_label)
+    plan["reads_processed"] = reader.reads_processed
+    return results, reader.reads_processed, plan
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -155,75 +222,134 @@ def main(argv: list[str] | None = None) -> int:
     if args.mode not in ("base", "with_adapter"):
         raise SystemExit("Error: --mode must be 'base' or 'with_adapter'")
 
+    if args.layout == "paired":
+        if args.fastq_r2 is None:
+            raise SystemExit("Error: --layout paired requires fastq_r2")
+        if not args.fastq_r2.is_file():
+            raise SystemExit(f"Error: R2 FASTQ file not found: {args.fastq_r2}")
+    elif args.fastq_r2 is not None:
+        raise SystemExit("Error: fastq_r2 provided but layout is single")
+
+    ctx = build_context(args)
+    scout = FastqScout(ctx)
     html_path = args.output or args.fastq.with_name(f"{args.fastq.stem}_scout.html")
 
-    sample_plan, sample_budget = _build_sample_plan(args)
-    reader = FastqReader(args.fastq, chunk_size=args.chunk_size, sample_budget=sample_budget)
+    print(f"Layout: {ctx.layout} | Library: {ctx.library_type}")
 
-    metrics = [
-        PerPositionQuality(),
-        PerSequenceQuality(),
-        LengthDistribution(),
-        GCContent(),
-        PerBaseSequenceContent(),
-        DuplicateRate(),
-    ]
-    if args.mode == "with_adapter":
-        metrics.append(AdapterDiscovery())
+    if ctx.is_paired:
+        plan_r1, sample_budget_r1 = _build_sample_plan(args, ctx, args.fastq)
+        plan_r2, sample_budget_r2 = _build_sample_plan(args, ctx, args.fastq_r2)
 
-    pipeline = Pipeline(metrics=metrics)
-
-    print(f"Total reads in file: {sample_plan['total_reads']:,}")
-    print(f"Sampling mode: {sample_plan.get('mode', 'auto')}")
-    if sample_budget is not None:
-        print(
-            f"Scout sample budget: {sample_plan['sample_budget']:,} reads "
-            f"({sample_plan['sample_fraction_pct']}% of file)"
+        print(f"R1: {args.fastq.name}")
+        print(f"R2: {args.fastq_r2.name}")
+        print("Start processing R1...")
+        results_r1, processed_r1, plan_r1 = _run_fastq(
+            args.fastq, "R1", args, ctx, plan_r1, sample_budget_r1
         )
-        if sample_plan.get("mode") == "with_adapter":
-            print(
-                f"Adapter-oriented budget: {sample_plan['sample_budget_for_adapters']:,} reads "
-                f"({sample_plan['sample_fraction_pct_for_adapters']}% of file)"
-            )
+        print(f"Processed R1: {processed_r1:,} reads")
+
+        print("Start processing R2...")
+        results_r2, processed_r2, plan_r2 = _run_fastq(
+            args.fastq_r2, "R2", args, ctx, plan_r2, sample_budget_r2
+        )
+        print(f"Processed R2: {processed_r2:,} reads")
+
+        verdict, scout_report = scout.result_paired(results_r1, results_r2)
+
+        combined_plan = {
+            "layout": ctx.layout,
+            "library_type": ctx.library_type,
+            "R1": plan_r1,
+            "R2": plan_r2,
+        }
+
+        with tempfile.TemporaryDirectory(prefix="fastq_scout_") as temp_dir:
+            temp_path = Path(temp_dir)
+            plot_paths = build_plot_paths(results_r1, temp_path, name_suffix="_r1")
+            r2_plot_paths = build_plot_paths(results_r2, temp_path, name_suffix="_r2")
+            plot_paths.update({f"R2: {title}": path for title, path in r2_plot_paths.items()})
+
+            if args.plot_dir:
+                args.plot_dir.mkdir(parents=True, exist_ok=True)
+                saved_plots = {}
+                for title, plot_path in plot_paths.items():
+                    target = args.plot_dir / plot_path.name
+                    shutil.copy2(plot_path, target)
+                    saved_plots[title] = target
+                plot_paths = saved_plots
+
+            HtmlReport(
+                args.fastq,
+                results_r1,
+                scout_report,
+                plot_paths,
+                sample_plan=combined_plan,
+                fastq_r2=args.fastq_r2,
+                r2_metrics=results_r2,
+            ).save(html_path)
+
+        json_metrics = {"R1": results_r1, "R2": results_r2}
+        json_sampling = combined_plan
     else:
-        print("Scout mode: full file")
+        sample_plan, sample_budget = _build_sample_plan(args, ctx, args.fastq)
 
-    print("Start processing...")
-    results = pipeline.run(reader)
+        print(f"Total reads in file: {sample_plan['total_reads']:,}")
+        print(f"Sampling mode: {sample_plan.get('mode', 'auto')}")
+        if sample_budget is not None:
+            print(
+                f"Scout sample budget: {sample_plan['sample_budget']:,} reads "
+                f"({sample_plan['sample_fraction_pct']}% of file)"
+            )
+            if sample_plan.get("mode") == "with_adapter":
+                print(
+                    f"Adapter-oriented budget: {sample_plan['sample_budget_for_adapters']:,} reads "
+                    f"({sample_plan['sample_fraction_pct_for_adapters']}% of file)"
+                )
+        else:
+            print("Scout mode: full file")
 
-    sample_plan["reads_processed"] = reader.reads_processed
-    print(f"Processed {reader.reads_processed:,} reads")
+        print("Start processing...")
+        results, processed, sample_plan = _run_fastq(
+            args.fastq, "R1", args, ctx, sample_plan, sample_budget
+        )
+        print(f"Processed {processed:,} reads")
 
-    scout = FastqScout()
-    verdict, scout_report = scout.result(results)
+        verdict, scout_report = scout.result(results)
 
-    with tempfile.TemporaryDirectory(prefix="fastq_scout_") as temp_dir:
-        plot_paths = build_plot_paths(results, Path(temp_dir))
+        with tempfile.TemporaryDirectory(prefix="fastq_scout_") as temp_dir:
+            plot_paths = build_plot_paths(results, Path(temp_dir))
 
-        if args.plot_dir:
-            args.plot_dir.mkdir(parents=True, exist_ok=True)
-            saved_plots = {}
-            for title, plot_path in plot_paths.items():
-                target = args.plot_dir / plot_path.name
-                shutil.copy2(plot_path, target)
-                saved_plots[title] = target
-            plot_paths = saved_plots
+            if args.plot_dir:
+                args.plot_dir.mkdir(parents=True, exist_ok=True)
+                saved_plots = {}
+                for title, plot_path in plot_paths.items():
+                    target = args.plot_dir / plot_path.name
+                    shutil.copy2(plot_path, target)
+                    saved_plots[title] = target
+                plot_paths = saved_plots
 
-        HtmlReport(
-            args.fastq,
-            results,
-            scout_report,
-            plot_paths,
-            sample_plan=sample_plan,
-        ).save(html_path)
+            HtmlReport(
+                args.fastq,
+                results,
+                scout_report,
+                plot_paths,
+                sample_plan=sample_plan,
+            ).save(html_path)
+
+        json_metrics = results
+        json_sampling = sample_plan
 
     if args.json:
         args.json.parent.mkdir(parents=True, exist_ok=True)
         with open(args.json, "w", encoding="utf-8") as f:
             json.dump(
                 {
-                    "sampling": sample_plan,
-                    "metrics": results,
+                    "run": {
+                        "layout": ctx.layout,
+                        "library_type": ctx.library_type,
+                    },
+                    "sampling": json_sampling,
+                    "metrics": json_metrics,
                     "scout": scout_report,
                 },
                 f,

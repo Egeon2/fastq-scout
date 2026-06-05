@@ -212,15 +212,17 @@ class DuplicateRate(BaseMetric):
 class AdapterDiscovery(BaseMetric):
     def __init__(
         self,
-        k: int = 10,
-        tail_len: int = 15,
-        middle_start: int = 20,
-        middle_end: int = 80,
+        k: int = 20,
+        tail_len: int = 35,
+        middle_start: int = 10,
+        middle_end: int = 100,
+        adapter_set: str = "all",
     ):
         self.k = k
         self.tail_len = tail_len
         self.middle_start = middle_start
         self.middle_end = middle_end
+        self.adapter_set = adapter_set
         self._tail_kmers: dict[str, int] = {}
         self._middle_kmers: dict[str, int] = {}
         self._read_tails: list[str] = []
@@ -237,15 +239,20 @@ class AdapterDiscovery(BaseMetric):
 
             tail = seq[-self.tail_len:] if len(seq) >= self.tail_len else seq
             self._read_tails.append(tail)
-            count_kmers_in_seq(tail, self.k, self._tail_kmers)
 
             if len(seq) >= self.middle_end:
                 middle = seq[self.middle_start:self.middle_end]
                 count_kmers_in_seq(middle, self.k, self._middle_kmers)
 
+            count_kmers_in_seq(tail, self.k, self._tail_kmers)
+
     def result(self):
+        from fastq_scout.adapter_references import ADAPTER_SETS
+
+        references = ADAPTER_SETS.get(self.adapter_set, ADAPTER_SETS["all"])
         return discover_adapters(
+            self._read_tails,
             self._tail_kmers,
             self._middle_kmers,
-            self._read_tails,
+            references=references,
         )
