@@ -14,11 +14,19 @@ VERDICT_STYLES = {
 
 class HtmlReport:
 
-    def __init__(self, fastq_path: Path, metrics: dict, scout_report: dict, plot_paths: dict[str, Path]):
+    def __init__(
+        self,
+        fastq_path: Path,
+        metrics: dict,
+        scout_report: dict,
+        plot_paths: dict[str, Path],
+        sample_plan: dict | None = None,
+    ):
         self.fastq_path = fastq_path
         self.metrics = metrics
         self.scout_report = scout_report
         self.plot_paths = plot_paths
+        self.sample_plan = sample_plan or {}
 
     def save(self, output_path: Path) -> Path:
         output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -44,6 +52,7 @@ class HtmlReport:
         recommendations = self.scout_report.get("recommendations", [])
 
         generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        sampling_section = self._sampling_section()
 
         return f"""<!DOCTYPE html>
 <html lang="en">
@@ -180,6 +189,8 @@ class HtmlReport:
             <p>Generated: {generated_at}</p>
         </header>
 
+        {sampling_section}
+
         <div class="verdict">
             <div class="verdict-label">Pre-flight verdict</div>
             <div class="verdict-value">{html.escape(verdict)}</div>
@@ -266,6 +277,58 @@ class HtmlReport:
             return "—"
         return f"{value}%"
 
+    def _sampling_section(self) -> str:
+        if not self.sample_plan:
+            return ""
+
+        plan = self.sample_plan
+        total_reads = plan.get("total_reads")
+        sample_budget = plan.get("sample_budget")
+        if total_reads is None or sample_budget is None:
+            return ""
+
+        reads_processed = plan.get("reads_processed", sample_budget)
+        mode = plan.get("mode", "auto")
+        rows = [
+            ("Mode", mode),
+            ("Total reads in file", f"{total_reads:,}"),
+            ("Reads analyzed", f"{reads_processed:,}"),
+            ("Sample fraction", f"{plan.get('sample_fraction_pct', '—')}%"),
+            ("Confidence target", f"{plan.get('confidence_pct', 95.0)}%"),
+            ("Margin (rates)", f"±{plan.get('margin_rate', '—')}"),
+            ("Margin (mean PHRED)", f"±{plan.get('margin_mean', '—')}"),
+            ("n (proportion formula)", plan.get("n_proportion", "—")),
+            ("n (mean formula)", plan.get("n_mean", "—")),
+            ("n (base stat)", plan.get("n_stat_base", "—")),
+        ]
+
+        if mode == "with_adapter":
+            rows.extend([
+                ("n (adapter formula)", plan.get("n_proportion_adapter", "—")),
+                ("n (adapter stat)", plan.get("n_stat_adapter", "—")),
+                (
+                    "Adapter-oriented budget",
+                    f"{plan.get('sample_budget_for_adapters', '—'):,} reads "
+                    f"({plan.get('sample_fraction_pct_for_adapters', '—')}%)",
+                ),
+            ])
+
+        if mode in ("base", "with_adapter") and plan.get("sample_budget_base") is not None:
+            rows.append(("Base QC budget", f"{plan['sample_budget_base']:,} reads"))
+
+        table_rows = "".join(
+            f"<tr><td>{html.escape(str(label))}</td><td><strong>{html.escape(str(value))}</strong></td></tr>"
+            for label, value in rows
+        )
+
+        return f"""
+        <section>
+            <h2>Sampling</h2>
+            <table style="width:100%; border-collapse: collapse;">
+                <tbody>{table_rows}</tbody>
+            </table>
+        </section>"""
+
     def _list_block(self, items: list[str], empty_text: str) -> str:
         if not items:
             return f'<p class="empty">{html.escape(empty_text)}</p>'
@@ -301,6 +364,8 @@ class HtmlReport:
             else:
                 summary[name] = data
         summary["scout"] = self.scout_report
+        if self.sample_plan:
+            summary["sampling"] = self.sample_plan
         return summary
 
 
