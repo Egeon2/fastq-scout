@@ -47,12 +47,16 @@ class HtmlReport:
         mean_gc = gc.get("mean_gc", 0)
         q20_pct = seq_quality.get("q20_pct", "—")
         q30_pct = seq_quality.get("q30_pct", "—")
+        adapter = self.metrics.get("Adapter discovery", {})
+        adapter_pct = adapter.get("adapter_content_pct", "—")
+        adapter_consensus = adapter.get("consensus", "")
 
         issues = self.scout_report.get("issues", [])
         recommendations = self.scout_report.get("recommendations", [])
 
         generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
         sampling_section = self._sampling_section()
+        adapter_section = self._adapter_section(adapter)
 
         return f"""<!DOCTYPE html>
 <html lang="en">
@@ -226,7 +230,10 @@ class HtmlReport:
                 <div class="card-label">Duplicate rate</div>
                 <div class="card-value">{self._format_duplicate(duplicates)}</div>
             </div>
+            {self._adapter_cards(adapter_pct, adapter_consensus)}
         </div>
+
+        {adapter_section}
 
         <section>
             <h2>Issues</h2>
@@ -276,6 +283,62 @@ class HtmlReport:
         if value == "—":
             return "—"
         return f"{value}%"
+
+    def _adapter_cards(self, adapter_pct, adapter_consensus: str) -> str:
+        if adapter_pct == "—" and not adapter_consensus:
+            return ""
+        consensus_value = adapter_consensus[:24] + "..." if len(adapter_consensus) > 24 else adapter_consensus
+        if not consensus_value:
+            consensus_value = "—"
+        return f"""
+            <div class="card">
+                <div class="card-label">Adapter content</div>
+                <div class="card-value">{self._format_pct(adapter_pct)}</div>
+            </div>
+            <div class="card">
+                <div class="card-label">Adapter consensus</div>
+                <div class="card-value" style="font-size:1rem;">{html.escape(consensus_value)}</div>
+            </div>"""
+
+    def _adapter_section(self, adapter: dict) -> str:
+        if not adapter:
+            return ""
+
+        candidates = adapter.get("candidates", [])
+        if not candidates and not adapter.get("consensus"):
+            return ""
+
+        rows = []
+        for candidate in candidates:
+            rows.append(
+                "<tr>"
+                f"<td>{html.escape(candidate.get('sequence', ''))}</td>"
+                f"<td>{candidate.get('reads_pct', 0)}%</td>"
+                f"<td>{candidate.get('enrichment', '—')}×</td>"
+                f"<td>{candidate.get('tail_count', '—')}</td>"
+                "</tr>"
+            )
+
+        table_rows = "".join(rows) if rows else (
+            f"<tr><td colspan='4'>{html.escape(adapter.get('consensus', 'No candidates'))}</td></tr>"
+        )
+
+        return f"""
+        <section>
+            <h2>Adapter discovery</h2>
+            <p>Analyzed read tails from {adapter.get('reads_analyzed', 0):,} reads.</p>
+            <table style="width:100%; border-collapse: collapse;">
+                <thead>
+                    <tr>
+                        <th align="left">Sequence</th>
+                        <th align="left">Reads matched</th>
+                        <th align="left">Enrichment</th>
+                        <th align="left">Tail k-mer count</th>
+                    </tr>
+                </thead>
+                <tbody>{table_rows}</tbody>
+            </table>
+        </section>"""
 
     def _sampling_section(self) -> str:
         if not self.sample_plan:
@@ -361,6 +424,10 @@ class HtmlReport:
                 summary[name] = {
                     key: value for key, value in data.items() if key != "histogram"
                 }
+            elif name == "Adapter discovery" and isinstance(data, dict):
+                summary[name] = {
+                    key: value for key, value in data.items() if key != "enrichment_top"
+                }
             else:
                 summary[name] = data
         summary["scout"] = self.scout_report
@@ -379,6 +446,7 @@ def build_plot_paths(metrics: dict, output_dir: Path) -> dict[str, Path]:
         "GC content": "GC content",
         "Per base sequence content": "Per base sequence content",
         "Duplicates rate": "Duplicate rate",
+        "Adapter discovery": "Adapter enrichment",
     }
 
     plot_paths = {}

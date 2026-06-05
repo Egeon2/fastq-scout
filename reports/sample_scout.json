@@ -951,17 +951,125 @@
         12.09
       ]
     },
-    "Duplicates rate": 5.7
+    "Duplicates rate": 5.7,
+    "Adapter discovery": {
+      "adapter_content_pct": 3.2,
+      "consensus": "CGTCTTCTGC",
+      "candidates": [
+        {
+          "seed": "CGTCTTCTGC",
+          "sequence": "CGTCTTCTGC",
+          "reads_matched": 320,
+          "reads_pct": 3.2,
+          "tail_count": 182,
+          "middle_count": 0,
+          "enrichment": 183.0
+        },
+        {
+          "seed": "CTTCTGCTTG",
+          "sequence": "CTTCTGCTTG",
+          "reads_matched": 278,
+          "reads_pct": 2.78,
+          "tail_count": 131,
+          "middle_count": 0,
+          "enrichment": 132.0
+        },
+        {
+          "seed": "GTCTTCTGCT",
+          "sequence": "GTCTTCTGCT",
+          "reads_matched": 256,
+          "reads_pct": 2.56,
+          "tail_count": 122,
+          "middle_count": 0,
+          "enrichment": 123.0
+        }
+      ],
+      "enrichment_top": [
+        {
+          "kmer": "CGTCTTCTGC",
+          "tail_count": 182,
+          "middle_count": 0,
+          "enrichment": 183.0,
+          "rank_score": 33306.0
+        },
+        {
+          "kmer": "CTTCTGCTTG",
+          "tail_count": 131,
+          "middle_count": 0,
+          "enrichment": 132.0,
+          "rank_score": 17292.0
+        },
+        {
+          "kmer": "GTCTTCTGCT",
+          "tail_count": 122,
+          "middle_count": 0,
+          "enrichment": 123.0,
+          "rank_score": 15006.0
+        },
+        {
+          "kmer": "TCTTCTGCTT",
+          "tail_count": 119,
+          "middle_count": 0,
+          "enrichment": 120.0,
+          "rank_score": 14280.0
+        },
+        {
+          "kmer": "TCTGCTTGAA",
+          "tail_count": 113,
+          "middle_count": 0,
+          "enrichment": 114.0,
+          "rank_score": 12882.0
+        },
+        {
+          "kmer": "CCGTCTTCTG",
+          "tail_count": 97,
+          "middle_count": 0,
+          "enrichment": 98.0,
+          "rank_score": 9506.0
+        },
+        {
+          "kmer": "TTCTGCTTGA",
+          "tail_count": 124,
+          "middle_count": 2,
+          "enrichment": 41.67,
+          "rank_score": 5166.666666666666
+        },
+        {
+          "kmer": "GCCGTCTTCT",
+          "tail_count": 58,
+          "middle_count": 0,
+          "enrichment": 59.0,
+          "rank_score": 3422.0
+        },
+        {
+          "kmer": "TTCCGTCTTC",
+          "tail_count": 51,
+          "middle_count": 0,
+          "enrichment": 52.0,
+          "rank_score": 2652.0
+        },
+        {
+          "kmer": "TGCCGTCTTC",
+          "tail_count": 70,
+          "middle_count": 1,
+          "enrichment": 35.5,
+          "rank_score": 2485.0
+        }
+      ],
+      "reads_analyzed": 10000
+    }
   },
   "scout": {
     "verdict": "TRIM",
     "issues": [
       "Quality drops at read tail (head 36.5 vs tail 31.0)",
-      "GC distribution looks bimodal"
+      "GC distribution looks bimodal",
+      "Low-level adapter signal detected (3.2%)"
     ],
     "recommendations": [
       "Run fastp --cut_tail --cut_window_size 4 --cut_mean_quality 20",
-      "Screen for contamination with Kraken or sourmash"
+      "Screen for contamination with Kraken or sourmash",
+      "Consider trimming: fastp --adapter_sequence CGTCTTCTGC"
     ]
   }
 }

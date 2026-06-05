@@ -1,5 +1,7 @@
 from abc import ABC, abstractmethod
 
+from fastq_scout.adapter_searching import count_kmers_in_seq, discover_adapters
+
 
 class BaseMetric(ABC):
 
@@ -205,3 +207,45 @@ class DuplicateRate(BaseMetric):
         
         rate = (self._duplicates / self._total) * 100
         return round(rate, 2)
+
+
+class AdapterDiscovery(BaseMetric):
+    def __init__(
+        self,
+        k: int = 10,
+        tail_len: int = 15,
+        middle_start: int = 20,
+        middle_end: int = 80,
+    ):
+        self.k = k
+        self.tail_len = tail_len
+        self.middle_start = middle_start
+        self.middle_end = middle_end
+        self._tail_kmers: dict[str, int] = {}
+        self._middle_kmers: dict[str, int] = {}
+        self._read_tails: list[str] = []
+
+    @property
+    def name(self):
+        return "Adapter discovery"
+
+    def update(self, chunk):
+        for read in chunk:
+            seq = read.sequence.upper()
+            if len(seq) < self.k:
+                continue
+
+            tail = seq[-self.tail_len:] if len(seq) >= self.tail_len else seq
+            self._read_tails.append(tail)
+            count_kmers_in_seq(tail, self.k, self._tail_kmers)
+
+            if len(seq) >= self.middle_end:
+                middle = seq[self.middle_start:self.middle_end]
+                count_kmers_in_seq(middle, self.k, self._middle_kmers)
+
+    def result(self):
+        return discover_adapters(
+            self._tail_kmers,
+            self._middle_kmers,
+            self._read_tails,
+        )

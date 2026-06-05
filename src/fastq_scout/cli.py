@@ -11,6 +11,7 @@ from fastq_scout.metrics import (
     PerBaseSequenceContent,
     DuplicateRate,
     PerSequenceQuality,
+    AdapterDiscovery,
 )
 from fastq_scout.pipeline import Pipeline
 from fastq_scout.reader import FastqReader
@@ -159,14 +160,18 @@ def main(argv: list[str] | None = None) -> int:
     sample_plan, sample_budget = _build_sample_plan(args)
     reader = FastqReader(args.fastq, chunk_size=args.chunk_size, sample_budget=sample_budget)
 
-    pipeline = Pipeline(metrics=[
+    metrics = [
         PerPositionQuality(),
         PerSequenceQuality(),
         LengthDistribution(),
         GCContent(),
         PerBaseSequenceContent(),
         DuplicateRate(),
-    ])
+    ]
+    if args.mode == "with_adapter":
+        metrics.append(AdapterDiscovery())
+
+    pipeline = Pipeline(metrics=metrics)
 
     print(f"Total reads in file: {sample_plan['total_reads']:,}")
     print(f"Sampling mode: {sample_plan.get('mode', 'auto')}")

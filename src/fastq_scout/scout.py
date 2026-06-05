@@ -76,6 +76,23 @@ class FastqScout(Scout):
             issues.append(f"Elevated duplicate rate ({duplicates}%)")
             recommendations.append("Check PCR cycles; consider fastp --dedup for WGS")
 
+        adapter = metrics.get("Adapter discovery", {})
+        adapter_pct = adapter.get("adapter_content_pct", 0)
+        consensus = adapter.get("consensus", "")
+        if adapter_pct > 5:
+            issues.append(f"Adapter sequence detected on read tails ({adapter_pct}%)")
+            if consensus:
+                recommendations.append(
+                    f"Run fastp --adapter_sequence {consensus} --cut_tail"
+                )
+            else:
+                recommendations.append("Run fastp with adapter trimming enabled")
+        elif adapter_pct > 0.5 and consensus:
+            issues.append(f"Low-level adapter signal detected ({adapter_pct}%)")
+            recommendations.append(
+                f"Consider trimming: fastp --adapter_sequence {consensus}"
+            )
+
         if overall_mean < 20 or duplicates > 70:
             verdict = "REJECT"
         elif issues:

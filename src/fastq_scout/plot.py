@@ -100,6 +100,21 @@ class MetricPlotter:
             plt.grid(True, linestyle='--', alpha=0.7)
             output_path = output_dir / "per_sequence_quality_scores.png"
 
+        elif self.metric_name == "Adapter discovery":
+            enrichment_top = self.data.get("enrichment_top", [])
+            if not enrichment_top:
+                plt.text(0.5, 0.5, "No adapter k-mer candidates", ha="center", va="center")
+                plt.axis("off")
+            else:
+                kmers = [item["kmer"] for item in enrichment_top]
+                values = [item["enrichment"] for item in enrichment_top]
+                plt.barh(kmers[::-1], values[::-1], color="#9b59b6", alpha=0.85)
+                plt.title("Tail k-mer Enrichment (Adapter Candidates)", fontsize=14)
+                plt.xlabel("Enrichment (tail / middle)")
+                plt.ylabel("k-mer")
+                plt.grid(True, linestyle='--', alpha=0.7)
+            output_path = output_dir / "adapter_enrichment.png"
+
         else:
             plt.close()
             raise ValueError(f"Unknown metric: {self.metric_name}")
