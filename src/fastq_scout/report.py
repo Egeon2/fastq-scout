@@ -1,6 +1,5 @@
 import base64
 import html
-import json
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -55,6 +54,7 @@ class HtmlReport:
         adapter_pct = adapter.get("adapter_content_pct", "—")
         adapter_trim = adapter.get("trim_sequence") or adapter.get("consensus", "")
         adapter_reference = adapter.get("reference_name", "")
+        adapter_ref_seq = adapter.get("reference_sequence", "")
 
         issues = self.scout_report.get("issues", [])
         recommendations = self.scout_report.get("recommendations", [])
@@ -131,11 +131,21 @@ class HtmlReport:
             gap: 16px;
             margin-bottom: 24px;
         }}
+        .grid-adapter {{
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 16px;
+            margin-bottom: 24px;
+        }}
         .card {{
             background: var(--card);
             border: 1px solid var(--border);
             border-radius: 10px;
             padding: 16px;
+            min-width: 0;
+        }}
+        .card--seq {{
+            grid-column: 1 / -1;
         }}
         .card-label {{
             font-size: 0.85rem;
@@ -145,6 +155,47 @@ class HtmlReport:
         .card-value {{
             font-size: 1.5rem;
             font-weight: 700;
+        }}
+        .card-value--text {{
+            font-size: 1rem;
+            font-weight: 600;
+            line-height: 1.45;
+            word-break: break-all;
+            overflow-wrap: anywhere;
+            white-space: normal;
+        }}
+        .card-value--mono {{
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+            font-size: 0.92rem;
+            font-weight: 500;
+            line-height: 1.5;
+            word-break: break-all;
+            overflow-wrap: anywhere;
+            white-space: normal;
+            letter-spacing: 0.02em;
+        }}
+        .adapter-table {{
+            width: 100%;
+            border-collapse: collapse;
+            table-layout: fixed;
+        }}
+        .adapter-table th,
+        .adapter-table td {{
+            padding: 10px 12px;
+            border-bottom: 1px solid var(--border);
+            vertical-align: top;
+            text-align: left;
+        }}
+        .adapter-table th {{
+            font-size: 0.85rem;
+            color: var(--muted);
+        }}
+        .adapter-table .seq-cell {{
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+            font-size: 0.88rem;
+            word-break: break-all;
+            overflow-wrap: anywhere;
+            white-space: normal;
         }}
         section {{
             background: var(--card);
@@ -166,18 +217,75 @@ class HtmlReport:
         }}
         .plots {{
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
-            gap: 20px;
+            grid-template-columns: 1fr;
+            gap: 24px;
+        }}
+        .plot-card {{
+            cursor: zoom-in;
+        }}
+        .plot-card a {{
+            display: block;
+            text-decoration: none;
         }}
         .plot-card img {{
             width: 100%;
             height: auto;
+            min-height: 280px;
+            max-height: 520px;
+            object-fit: contain;
             border: 1px solid var(--border);
             border-radius: 8px;
             background: #fff;
+            transition: box-shadow 0.15s ease, transform 0.15s ease;
+        }}
+        .plot-card img:hover {{
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+            transform: translateY(-1px);
         }}
         .plot-card h3 {{
             margin: 0 0 12px;
+            font-size: 1.05rem;
+        }}
+        .plot-hint {{
+            margin: 0 0 16px;
+            color: var(--muted);
+            font-size: 0.9rem;
+        }}
+        .plot-modal {{
+            display: none;
+            position: fixed;
+            inset: 0;
+            z-index: 1000;
+            background: rgba(0, 0, 0, 0.88);
+            padding: 24px;
+            box-sizing: border-box;
+        }}
+        .plot-modal:target {{
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }}
+        .plot-modal img {{
+            max-width: 96vw;
+            max-height: 92vh;
+            object-fit: contain;
+            background: #fff;
+            border-radius: 8px;
+        }}
+        .plot-modal-close {{
+            position: fixed;
+            top: 16px;
+            right: 24px;
+            color: #fff;
+            font-size: 2rem;
+            text-decoration: none;
+            line-height: 1;
+        }}
+        .plot-modal-title {{
+            position: fixed;
+            top: 20px;
+            left: 24px;
+            color: #fff;
             font-size: 1rem;
         }}
         .empty {{
@@ -238,8 +346,9 @@ class HtmlReport:
                 <div class="card-label">Duplicate rate</div>
                 <div class="card-value">{self._format_duplicate(duplicates)}</div>
             </div>
-            {self._adapter_cards(adapter, adapter_pct, adapter_trim, adapter_reference)}
         </div>
+
+        {self._adapter_cards_block(adapter, adapter_pct, adapter_trim, adapter_reference, adapter_ref_seq)}
 
         {adapter_section}
 
@@ -257,15 +366,12 @@ class HtmlReport:
 
         <section>
             <h2>QC plots</h2>
+            <p class="plot-hint">Click any plot to open it full size.</p>
             <div class="plots">
                 {self._plots_block()}
             </div>
         </section>
-
-        <section>
-            <h2>Raw metrics summary</h2>
-            <pre>{html.escape(json.dumps(self._metrics_summary(), indent=2))}</pre>
-        </section>
+        {self._plot_modals()}
 
         <footer>FastqScout — lightweight pre-flight QC for FASTQ data</footer>
     </div>
@@ -294,19 +400,34 @@ class HtmlReport:
             return "—"
         return f"{value}%"
 
+    def _adapter_cards_block(
+        self,
+        adapter: dict,
+        adapter_pct,
+        adapter_trim: str,
+        adapter_reference: str,
+        adapter_ref_seq: str = "",
+    ) -> str:
+        cards = self._adapter_cards(
+            adapter, adapter_pct, adapter_trim, adapter_reference, adapter_ref_seq
+        )
+        if not cards:
+            return ""
+        return f'<div class="grid-adapter">{cards}</div>'
+
     def _adapter_cards(
         self,
         adapter: dict,
         adapter_pct,
         adapter_trim: str,
         adapter_reference: str,
+        adapter_ref_seq: str = "",
     ) -> str:
         if adapter_pct == "—" and not adapter_trim:
             return ""
 
-        trim_value = adapter_trim[:28] + "..." if len(adapter_trim) > 28 else adapter_trim
-        if not trim_value:
-            trim_value = "—"
+        trim_value = adapter_trim or "—"
+        ref_seq_value = adapter_ref_seq or trim_value
 
         method = adapter.get("detection_method", "none")
         method_label = {
@@ -326,15 +447,19 @@ class HtmlReport:
             </div>
             <div class="card">
                 <div class="card-label">Matched reference</div>
-                <div class="card-value" style="font-size:1rem;">{html.escape(reference_value)}</div>
-            </div>
-            <div class="card">
-                <div class="card-label">fastp trim sequence</div>
-                <div class="card-value" style="font-size:1rem;">{html.escape(trim_value)}</div>
+                <div class="card-value card-value--text">{html.escape(reference_value)}</div>
             </div>
             <div class="card">
                 <div class="card-label">Detection / identity</div>
-                <div class="card-value" style="font-size:1rem;">{html.escape(method_label)} / {identity_value}</div>
+                <div class="card-value card-value--text">{html.escape(method_label)} / {identity_value}</div>
+            </div>
+            <div class="card card--seq">
+                <div class="card-label">fastp trim sequence</div>
+                <div class="card-value card-value--mono">{html.escape(trim_value)}</div>
+            </div>
+            <div class="card card--seq">
+                <div class="card-label">Full adapter / motif</div>
+                <div class="card-value card-value--mono">{html.escape(ref_seq_value)}</div>
             </div>"""
 
     def _run_meta_lines(self) -> str:
@@ -364,7 +489,7 @@ class HtmlReport:
         return f"""
         <section>
             <h2>R2 summary</h2>
-            <div class="grid">
+            <div class="grid-adapter">
                 <div class="card">
                     <div class="card-label">R2 mean quality</div>
                     <div class="card-value">{quality.get("overall_mean", "—")}</div>
@@ -377,12 +502,15 @@ class HtmlReport:
                     <div class="card-label">R2 adapter content</div>
                     <div class="card-value">{self._format_pct(adapter_pct)}</div>
                 </div>
-                <div class="card">
+                <div class="card card--seq">
                     <div class="card-label">R2 fastp sequence</div>
-                    <div class="card-value" style="font-size:1rem;">{html.escape(adapter_trim or "—")}</div>
+                    <div class="card-value card-value--mono">{html.escape(adapter_trim or "—")}</div>
+                </div>
+                <div class="card card--seq">
+                    <div class="card-label">R2 matched reference</div>
+                    <div class="card-value card-value--text">{html.escape(adapter_reference)}</div>
                 </div>
             </div>
-            <p>Matched reference: {html.escape(adapter_reference)}</p>
         </section>"""
 
     def _adapter_section(self, adapter: dict) -> str:
@@ -410,30 +538,40 @@ class HtmlReport:
         for candidate in candidates:
             ref_name = candidate.get("reference_name") or "Unknown"
             trim_seq = candidate.get("trim_sequence") or candidate.get("sequence", "")
+            ref_seq = candidate.get("reference_sequence") or trim_seq
             identity = candidate.get("identity_pct", 0)
             identity_label = f"{identity}%" if identity else "—"
             rows.append(
                 "<tr>"
                 f"<td>{html.escape(ref_name)}</td>"
-                f"<td>{html.escape(trim_seq)}</td>"
+                f'<td class="seq-cell">{html.escape(trim_seq)}</td>'
+                f'<td class="seq-cell">{html.escape(ref_seq)}</td>'
                 f"<td>{candidate.get('reads_pct', 0)}%</td>"
                 f"<td>{identity_label}</td>"
                 "</tr>"
             )
 
         table_rows = "".join(rows) if rows else (
-            f"<tr><td colspan='4'>{html.escape(adapter.get('consensus', 'No candidates'))}</td></tr>"
+            f"<tr><td colspan='5'>{html.escape(adapter.get('consensus', 'No candidates'))}</td></tr>"
         )
 
         return f"""
         <section>
             <h2>Adapter discovery</h2>
             <p>{intro} Analyzed {adapter.get('reads_analyzed', 0):,} read tails.</p>
-            <table style="width:100%; border-collapse: collapse;">
+            <table class="adapter-table">
+                <colgroup>
+                    <col style="width:18%">
+                    <col style="width:28%">
+                    <col style="width:28%">
+                    <col style="width:12%">
+                    <col style="width:14%">
+                </colgroup>
                 <thead>
                     <tr>
                         <th align="left">Reference</th>
                         <th align="left">fastp sequence</th>
+                        <th align="left">Full adapter</th>
                         <th align="left">Reads matched</th>
                         <th align="left">Identity</th>
                     </tr>
@@ -511,42 +649,44 @@ class HtmlReport:
         rows = "".join(f"<li>{html.escape(item)}</li>" for item in items)
         return f"<ul>{rows}</ul>"
 
+    def _plot_id(self, title: str) -> str:
+        safe = "".join(ch if ch.isalnum() else "-" for ch in title.lower()).strip("-")
+        return f"plot-{safe}"
+
     def _plots_block(self) -> str:
         if not self.plot_paths:
             return '<p class="empty">No plots available.</p>'
 
         blocks = []
         for title, path in self.plot_paths.items():
+            plot_id = self._plot_id(title)
             encoded = base64.b64encode(path.read_bytes()).decode("ascii")
             blocks.append(
                 f"""<div class="plot-card">
                     <h3>{html.escape(title)}</h3>
-                    <img src="data:image/png;base64,{encoded}" alt="{html.escape(title)}">
+                    <a href="#{plot_id}">
+                        <img src="data:image/png;base64,{encoded}" alt="{html.escape(title)}">
+                    </a>
                 </div>"""
             )
         return "\n".join(blocks)
 
-    def _metrics_summary(self) -> dict:
-        summary = {}
-        for name, data in self.metrics.items():
-            if name == "Length distribution" and isinstance(data, dict):
-                summary[name] = {
-                    key: value for key, value in data.items() if key != "distribution"
-                }
-            elif name == "Per sequence quality scores" and isinstance(data, dict):
-                summary[name] = {
-                    key: value for key, value in data.items() if key != "histogram"
-                }
-            elif name == "Adapter discovery" and isinstance(data, dict):
-                summary[name] = {
-                    key: value for key, value in data.items() if key != "enrichment_top"
-                }
-            else:
-                summary[name] = data
-        summary["scout"] = self.scout_report
-        if self.sample_plan:
-            summary["sampling"] = self.sample_plan
-        return summary
+    def _plot_modals(self) -> str:
+        if not self.plot_paths:
+            return ""
+
+        modals = []
+        for title, path in self.plot_paths.items():
+            plot_id = self._plot_id(title)
+            encoded = base64.b64encode(path.read_bytes()).decode("ascii")
+            modals.append(
+                f"""<div class="plot-modal" id="{plot_id}">
+                    <a class="plot-modal-close" href="#" aria-label="Close">&times;</a>
+                    <div class="plot-modal-title">{html.escape(title)}</div>
+                    <img src="data:image/png;base64,{encoded}" alt="{html.escape(title)}">
+                </div>"""
+            )
+        return "\n".join(modals)
 
 
 def build_plot_paths(

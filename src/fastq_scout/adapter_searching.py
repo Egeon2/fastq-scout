@@ -144,7 +144,7 @@ def match_adapter_references(
     candidates = []
     adapter_pool = references if references is not None else ADAPTER_REFERENCES
 
-    for adapter in ADAPTER_REFERENCES:
+    for adapter in adapter_pool:
         trim_motif, match_rate = _pick_trim_motif(read_tails, adapter, max_mismatches)
         if match_rate <= 0:
             continue

@@ -3,6 +3,7 @@ import json
 import shutil
 import tempfile
 from pathlib import Path
+import time
 
 from fastq_scout.metrics import (
     PerPositionQuality,
@@ -136,6 +137,27 @@ def _build_metrics(mode: str, read_label: str) -> list:
     return metrics
 
 
+def _print_adapter_summary(results: dict, read_label: str = "") -> None:
+    adapter = results.get("Adapter discovery", {})
+    if not adapter or adapter.get("detection_method", "none") == "none":
+        return
+
+    prefix = f"[{read_label}] " if read_label else ""
+    pct = adapter.get("adapter_content_pct", 0)
+    ref_name = adapter.get("reference_name") or "Unknown"
+    trim_seq = adapter.get("trim_sequence") or adapter.get("consensus", "")
+    ref_seq = adapter.get("reference_sequence", "")
+    method = adapter.get("detection_method", "none")
+
+    print(f"{prefix}Adapter detected ({method}): {ref_name} — {pct}% of read tails")
+    if trim_seq:
+        print(f"{prefix}  fastp trim sequence: {trim_seq}")
+    if ref_seq:
+        print(f"{prefix}  full reference:      {ref_seq}")
+    elif trim_seq:
+        print(f"{prefix}  detected motif:      {trim_seq}")
+
+
 def _build_sample_plan(
     args: argparse.Namespace,
     ctx: RunContext,
@@ -208,6 +230,7 @@ def _run_fastq(
 
 
 def main(argv: list[str] | None = None) -> int:
+    
     args = build_parser().parse_args(argv)
 
     if not args.fastq.is_file():
@@ -255,6 +278,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Processed R2: {processed_r2:,} reads")
 
         verdict, scout_report = scout.result_paired(results_r1, results_r2)
+        _print_adapter_summary(results_r1, "R1")
+        _print_adapter_summary(results_r2, "R2")
 
         combined_plan = {
             "layout": ctx.layout,
@@ -315,6 +340,10 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Processed {processed:,} reads")
 
         verdict, scout_report = scout.result(results)
+        if args.mode == "with_adapter":
+            _print_adapter_summary(results)
+        else:
+            print("Adapter detection: off (use --mode with_adapter to enable)")
 
         with tempfile.TemporaryDirectory(prefix="fastq_scout_") as temp_dir:
             plot_paths = build_plot_paths(results, Path(temp_dir))
@@ -360,6 +389,8 @@ def main(argv: list[str] | None = None) -> int:
     print(f"HTML report saved to {html_path}")
     return VERDICT_EXIT_CODES.get(verdict, 0)
 
-
 if __name__ == "__main__":
-    raise SystemExit(main())
+    start_time = time.time()
+    exit_code = main()
+    print(f"Time taken: {time.time() - start_time:.2f} seconds")
+    raise SystemExit(exit_code)
