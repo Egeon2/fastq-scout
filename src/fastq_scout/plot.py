@@ -3,6 +3,40 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 
+from fastq_scout.nucleotides import IUPAC_MEANINGS, TRACKED_BASES
+
+_BASE_COLORS = {
+    "A": "#27ae60",
+    "C": "#3498db",
+    "T": "#e74c3c",
+    "G": "#2c3e50",
+    "U": "#9b59b6",
+    "N": "#95a5a6",
+    "M": "#f39c12",
+    "R": "#e67e22",
+    "W": "#1abc9c",
+    "S": "#16a085",
+    "K": "#d35400",
+    "Y": "#c0392b",
+    "V": "#8e44ad",
+    "H": "#2980b9",
+    "D": "#34495e",
+    "B": "#7f8c8d",
+    "Other": "#bdc3c7",
+}
+
+
+def _base_label(base: str) -> str:
+    if base in IUPAC_MEANINGS:
+        return f"{base} ({IUPAC_MEANINGS[base]})"
+    if base == "N":
+        return "N (unknown)"
+    if base == "U":
+        return "U (RNA)"
+    if base == "Other":
+        return "Other / unrecognized"
+    return base
+
 
 def _smooth(values: list[int | float], window: int = 2) -> list[float]:
     smoothed = []
@@ -71,15 +105,30 @@ class MetricPlotter:
             output_path = output_dir / "gc_content.png"
 
         elif self.metric_name == "Per base sequence content":
-            positions = list(range(1, len(self.data["A"]) + 1))
-            plt.plot(positions, self.data["A"], color='#27ae60', linewidth=1.5, label='A')
-            plt.plot(positions, self.data["C"], color='#3498db', linewidth=1.5, label='C')
-            plt.plot(positions, self.data["T"], color='#e74c3c', linewidth=1.5, label='T')
-            plt.plot(positions, self.data["G"], color='#2c3e50', linewidth=1.5, label='G')
+            series = [
+                base
+                for base in TRACKED_BASES
+                if base in self.data
+                and isinstance(self.data[base], list)
+                and self.data[base]
+                and max(self.data[base]) > 0
+            ]
+            if not series:
+                series = [base for base in ("A", "C", "G", "T") if base in self.data]
+
+            positions = list(range(1, len(self.data[series[0]]) + 1))
+            for base in series:
+                plt.plot(
+                    positions,
+                    self.data[base],
+                    color=_BASE_COLORS.get(base, "#7f8c8d"),
+                    linewidth=1.5,
+                    label=_base_label(base),
+                )
             plt.title("Per Base Sequence Content", fontsize=14)
             plt.xlabel("Position in Read")
             plt.ylabel("% Sequence Content")
-            plt.legend(loc='upper right')
+            plt.legend(loc="upper right", fontsize=8)
             plt.grid(True, linestyle='--', alpha=0.7)
             output_path = output_dir / "per_base_sequence_content.png"
 

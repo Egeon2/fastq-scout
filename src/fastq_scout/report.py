@@ -55,6 +55,8 @@ class HtmlReport:
         adapter_trim = adapter.get("trim_sequence") or adapter.get("consensus", "")
         adapter_reference = adapter.get("reference_name", "")
         adapter_ref_seq = adapter.get("reference_sequence", "")
+        base_content = self.metrics.get("Per base sequence content", {})
+        base_summary = base_content.get("summary", {})
 
         issues = self.scout_report.get("issues", [])
         recommendations = self.scout_report.get("recommendations", [])
@@ -346,6 +348,7 @@ class HtmlReport:
                 <div class="card-label">Duplicate rate</div>
                 <div class="card-value">{self._format_duplicate(duplicates)}</div>
             </div>
+            {self._nonstandard_base_cards(base_summary)}
         </div>
 
         {self._adapter_cards_block(adapter, adapter_pct, adapter_trim, adapter_reference, adapter_ref_seq)}
@@ -399,6 +402,40 @@ class HtmlReport:
         if value == "—":
             return "—"
         return f"{value}%"
+
+    def _nonstandard_base_cards(self, summary: dict) -> str:
+        if not summary:
+            return ""
+
+        cards = [
+            (
+                "Unknown bases (N)",
+                summary.get("mean_n_pct", 0),
+                f"max {summary.get('max_n_pct', 0)}%",
+            ),
+        ]
+
+        if summary.get("mean_u_pct", 0) > 0:
+            cards.append(("RNA uracil (U)", summary["mean_u_pct"], "avg across positions"))
+
+        if summary.get("mean_iupac_pct", 0) > 0:
+            cards.append(
+                ("IUPAC ambiguous", summary["mean_iupac_pct"], "M R W S K Y V H D B")
+            )
+
+        if summary.get("mean_other_pct", 0) > 0:
+            cards.append(("Unrecognized symbols", summary["mean_other_pct"], "not in IUPAC set"))
+
+        blocks = []
+        for label, mean_pct, hint in cards:
+            blocks.append(
+                f"""<div class="card">
+                <div class="card-label">{html.escape(label)}</div>
+                <div class="card-value">{mean_pct}%</div>
+                <div class="card-label">{html.escape(hint)}</div>
+            </div>"""
+            )
+        return "\n".join(blocks)
 
     def _adapter_cards_block(
         self,

@@ -44,6 +44,8 @@ class FastqScout(Scout):
         length = metrics.get("Length distribution", {})
         gc = metrics.get("GC content", {})
         duplicates = metrics.get("Duplicates rate", 0)
+        base_content = metrics.get("Per base sequence content", {})
+        base_summary = base_content.get("summary", {})
 
         overall_mean = quality.get("overall_mean", 0)
         per_position = quality.get("per_position_mean", [])
@@ -101,6 +103,39 @@ class FastqScout(Scout):
         elif duplicates > profile.duplicate_warn:
             issues.append(f"{prefix}Elevated duplicate rate ({duplicates}%)")
             recommendations.append(profile.dedup_recommendation)
+
+        mean_n_pct = base_summary.get("mean_n_pct", 0)
+        max_n_pct = base_summary.get("max_n_pct", 0)
+        if max_n_pct > 5:
+            issues.append(
+                f"{prefix}High unknown-base (N) content at some positions "
+                f"(up to {max_n_pct}%)"
+            )
+            recommendations.append(
+                "Filter or trim reads with N: fastp --n_base_limit 5"
+            )
+        elif mean_n_pct > 1:
+            issues.append(
+                f"{prefix}Elevated unknown-base (N) content ({mean_n_pct}% on average)"
+            )
+
+        mean_iupac_pct = base_summary.get("mean_iupac_pct", 0)
+        if mean_iupac_pct > 0.5:
+            issues.append(
+                f"{prefix}IUPAC ambiguous bases detected ({mean_iupac_pct}% on average)"
+            )
+            recommendations.append(
+                "Check base-calling quality or convert/filter ambiguous bases before alignment"
+            )
+
+        mean_u_pct = base_summary.get("mean_u_pct", 0)
+        if mean_u_pct > 0.5:
+            issues.append(
+                f"{prefix}RNA uracil (U) bases detected ({mean_u_pct}% on average)"
+            )
+            recommendations.append(
+                "Confirm library type; for DNA data consider U→T normalization before mapping"
+            )
 
         adapter = metrics.get("Adapter discovery", {})
         adapter_pct = adapter.get("adapter_content_pct", 0)

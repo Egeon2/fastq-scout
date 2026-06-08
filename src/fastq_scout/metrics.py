@@ -1,6 +1,7 @@
 from abc import ABC, abstractmethod
 
 from fastq_scout.adapter_searching import count_kmers_in_seq, discover_adapters
+from fastq_scout.nucleotides import IUPAC_AMBIGUOUS, TRACKED_BASES, classify_base
 
 
 class BaseMetric(ABC):
@@ -140,7 +141,7 @@ class GCContent(BaseMetric):
         }
 
 class PerBaseSequenceContent(BaseMetric):
-    _BASE_INDEX = {"A": 0, "C": 1, "G": 2, "T": 3}
+    _BASE_INDEX = {base: index for index, base in enumerate(TRACKED_BASES)}
 
     def __init__(self):
         self._base_counts = []
@@ -151,33 +152,49 @@ class PerBaseSequenceContent(BaseMetric):
         return "Per base sequence content"
 
     def update(self, chunk):
+        n_categories = len(TRACKED_BASES)
         for read in chunk:
             seq = read.sequence.upper()
 
             if len(seq) > len(self._base_counts):
                 extra = len(seq) - len(self._base_counts)
                 for _ in range(extra):
-                    self._base_counts.append([0, 0, 0, 0])
+                    self._base_counts.append([0] * n_categories)
                     self._position_count.append(0)
 
             for i, base in enumerate(seq):
-                base_idx = self._BASE_INDEX.get(base)
-                if base_idx is not None:
-                    self._base_counts[i][base_idx] += 1
+                base_idx = self._BASE_INDEX[classify_base(base)]
+                self._base_counts[i][base_idx] += 1
                 self._position_count[i] += 1
 
     def result(self):
-        content = {"A": [], "C": [], "G": [], "T": []}
+        content = {base: [] for base in TRACKED_BASES}
 
         for counts, total in zip(self._base_counts, self._position_count):
             if total == 0:
                 for base in content:
                     content[base].append(0.0)
             else:
-                content["A"].append(round(counts[0] / total * 100, 2))
-                content["C"].append(round(counts[1] / total * 100, 2))
-                content["G"].append(round(counts[2] / total * 100, 2))
-                content["T"].append(round(counts[3] / total * 100, 2))
+                for base, idx in self._BASE_INDEX.items():
+                    content[base].append(round(counts[idx] / total * 100, 2))
+
+        n_values = content["N"]
+        other_values = content["Other"]
+        n_positions = len(n_values)
+        iupac_per_position = [
+            sum(content[base][i] for base in IUPAC_AMBIGUOUS)
+            for i in range(n_positions)
+        ]
+
+        content["summary"] = {
+            "mean_n_pct": round(sum(n_values) / n_positions, 2) if n_positions else 0.0,
+            "max_n_pct": round(max(n_values), 2) if n_values else 0.0,
+            "mean_u_pct": round(sum(content["U"]) / n_positions, 2) if n_positions else 0.0,
+            "mean_other_pct": round(sum(other_values) / n_positions, 2) if n_positions else 0.0,
+            "mean_iupac_pct": round(sum(iupac_per_position) / n_positions, 2)
+            if n_positions
+            else 0.0,
+        }
 
         return content
 

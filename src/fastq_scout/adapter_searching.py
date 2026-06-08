@@ -1,6 +1,5 @@
 from fastq_scout.adapter_references import ADAPTER_REFERENCES, AdapterReference
-
-VALID_BASES = set("ACGT")
+from fastq_scout.nucleotides import is_unambiguous_dna
 
 REFERENCE_MIN_PCT = 0.5
 DENOVO_MIN_PCT = 0.5
@@ -9,7 +8,7 @@ MIN_TRIM_LEN = 16
 
 
 def is_valid_kmer(kmer: str) -> bool:
-    return bool(kmer) and all(base in VALID_BASES for base in kmer)
+    return bool(kmer) and all(is_unambiguous_dna(base) for base in kmer)
 
 
 def is_homopolymer_kmer(kmer: str, min_run: int = 4) -> bool:
