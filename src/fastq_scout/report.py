@@ -22,6 +22,7 @@ class HtmlReport:
         sample_plan: dict | None = None,
         fastq_r2: Path | None = None,
         r2_metrics: dict | None = None,
+        explanation: str | None = None,
     ):
         self.fastq_path = fastq_path
         self.metrics = metrics
@@ -30,6 +31,7 @@ class HtmlReport:
         self.sample_plan = sample_plan or {}
         self.fastq_r2 = fastq_r2
         self.r2_metrics = r2_metrics or {}
+        self.explanation = explanation
 
     def save(self, output_path: Path) -> Path:
         output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -294,6 +296,26 @@ class HtmlReport:
             color: var(--muted);
             font-style: italic;
         }}
+        .explanation {{
+            line-height: 1.65;
+            font-size: 0.98rem;
+        }}
+        .explanation h3 {{
+            margin: 20px 0 8px;
+            font-size: 1.05rem;
+        }}
+        .explanation h3:first-child {{
+            margin-top: 0;
+        }}
+        .explanation p {{
+            margin: 0 0 12px;
+        }}
+        .explanation-disclaimer {{
+            margin-top: 16px;
+            font-size: 0.85rem;
+            color: var(--muted);
+            font-style: italic;
+        }}
         footer {{
             color: var(--muted);
             font-size: 0.85rem;
@@ -366,6 +388,8 @@ class HtmlReport:
             <h2>What to do next</h2>
             {self._list_block(recommendations, "No extra steps required — proceed with your pipeline.")}
         </section>
+
+        {self._explanation_section()}
 
         <section>
             <h2>QC plots</h2>
@@ -685,6 +709,35 @@ class HtmlReport:
             return f'<p class="empty">{html.escape(empty_text)}</p>'
         rows = "".join(f"<li>{html.escape(item)}</li>" for item in items)
         return f"<ul>{rows}</ul>"
+
+    def _explanation_section(self) -> str:
+        if not self.explanation:
+            return ""
+
+        body = self._format_explanation_text(self.explanation)
+        return f"""
+        <section>
+            <h2>Plain-language summary</h2>
+            <p class="plot-hint">AI-generated explanation for wet-lab scientists (Qwen). Numbers match the report above.</p>
+            <div class="explanation">{body}</div>
+            <p class="explanation-disclaimer">This summary is for convenience only. Follow the verdict and recommendations above.</p>
+        </section>"""
+
+    def _format_explanation_text(self, text: str) -> str:
+        blocks = []
+        for block in text.split("\n\n"):
+            block = block.strip()
+            if not block:
+                continue
+            if block.startswith("## "):
+                blocks.append(f"<h3>{html.escape(block[3:].strip())}</h3>")
+                continue
+            if block.startswith("# "):
+                blocks.append(f"<h3>{html.escape(block[2:].strip())}</h3>")
+                continue
+            paragraph = html.escape(block).replace("\n", "<br>")
+            blocks.append(f"<p>{paragraph}</p>")
+        return "\n".join(blocks) if blocks else f"<p>{html.escape(text)}</p>"
 
     def _plot_id(self, title: str) -> str:
         safe = "".join(ch if ch.isalnum() else "-" for ch in title.lower()).strip("-")

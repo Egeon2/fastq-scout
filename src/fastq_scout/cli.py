@@ -21,6 +21,8 @@ from fastq_scout.reader import FastqReader
 from fastq_scout.report import HtmlReport, build_plot_paths
 from fastq_scout.sampling import count_fastq_reads, resolve_sample_budget
 from fastq_scout.scout import FastqScout
+from fastq_scout.explain import build_explain_payload
+from fastq_scout.qween_model import QwenModel
 
 
 VERDICT_EXIT_CODES = {
@@ -118,6 +120,11 @@ def build_parser() -> argparse.ArgumentParser:
         type=str,
         default="base",
         help="Sampling mode: base or with_adapter (default: base)",
+    )
+    parser.add_argument(
+        "--explain",
+        action="store_true",
+        help="Add a plain-language LLM summary to the HTML report (loads Qwen locally)",
     )
     return parser
 
@@ -303,6 +310,18 @@ def main(argv: list[str] | None = None) -> int:
                     saved_plots[title] = target
                 plot_paths = saved_plots
 
+            explanation = None
+            if args.explain:
+                print("Generating plain-language explanation...")
+                explain_payload = build_explain_payload(
+                    results_r1,
+                    scout_report,
+                    combined_plan,
+                    args.fastq,
+                    r2_metrics=results_r2,
+                )
+                explanation = QwenModel().generate(explain_payload)
+
             HtmlReport(
                 args.fastq,
                 results_r1,
@@ -311,6 +330,7 @@ def main(argv: list[str] | None = None) -> int:
                 sample_plan=combined_plan,
                 fastq_r2=args.fastq_r2,
                 r2_metrics=results_r2,
+                explanation=explanation,
             ).save(html_path)
 
         json_metrics = {"R1": results_r1, "R2": results_r2}
@@ -357,12 +377,24 @@ def main(argv: list[str] | None = None) -> int:
                     saved_plots[title] = target
                 plot_paths = saved_plots
 
+            explanation = None
+            if args.explain:
+                print("Generating plain-language explanation...")
+                explain_payload = build_explain_payload(
+                    results,
+                    scout_report,
+                    sample_plan,
+                    args.fastq,
+                )
+                explanation = QwenModel().generate(explain_payload)
+
             HtmlReport(
                 args.fastq,
                 results,
                 scout_report,
                 plot_paths,
                 sample_plan=sample_plan,
+                explanation=explanation,
             ).save(html_path)
 
         json_metrics = results
