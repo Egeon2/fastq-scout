@@ -22,8 +22,7 @@ from fastq_scout.reader import FastqReader
 from fastq_scout.report import HtmlReport, build_plot_paths
 from fastq_scout.sampling import count_fastq_reads, resolve_sample_budget
 from fastq_scout.scout import FastqScout
-from fastq_scout.explain import build_explain_payload
-from fastq_scout.qween_model import QwenModel
+from fastq_scout.explain import build_explain_payload, generate_explanation
 
 
 VERDICT_EXIT_CODES = {
@@ -134,12 +133,17 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--explain",
         action="store_true",
-        help="Add a plain-language LLM summary to the HTML report (loads Qwen locally)",
+        help="Add plain-language summary to HTML (rule-based template, English)",
+    )
+    parser.add_argument(
+        "--explain-llm",
+        action="store_true",
+        help="Try local Qwen for summary; falls back to template if output is bad",
     )
     parser.add_argument(
         "--llm-model",
         default="Qwen/Qwen2.5-0.5B-Instruct",
-        help="Hugging Face model for --explain (default: Qwen2.5-0.5B-Instruct)",
+        help="Hugging Face model for --explain-llm (default: Qwen2.5-0.5B-Instruct)",
     )
     return parser
 
@@ -346,7 +350,8 @@ def main(argv: list[str] | None = None) -> int:
                 plot_paths = saved_plots
 
             explanation = None
-            if args.explain:
+            explanation_source = None
+            if args.explain or args.explain_llm:
                 print("Generating plain-language explanation...")
                 explain_payload = build_explain_payload(
                     results_r1,
@@ -355,7 +360,12 @@ def main(argv: list[str] | None = None) -> int:
                     args.fastq,
                     r2_metrics=results_r2,
                 )
-                explanation = QwenModel(model_name=args.llm_model).generate(explain_payload)
+                explanation, explanation_source = generate_explanation(
+                    explain_payload,
+                    use_llm=args.explain_llm,
+                    model_name=args.llm_model,
+                )
+                print(f"Summary source: {explanation_source}")
 
             HtmlReport(
                 args.fastq,
@@ -366,6 +376,7 @@ def main(argv: list[str] | None = None) -> int:
                 fastq_r2=args.fastq_r2,
                 r2_metrics=results_r2,
                 explanation=explanation,
+                explanation_source=explanation_source,
             ).save(html_path)
 
         json_metrics = {"R1": results_r1, "R2": results_r2}
@@ -414,7 +425,8 @@ def main(argv: list[str] | None = None) -> int:
                 plot_paths = saved_plots
 
             explanation = None
-            if args.explain:
+            explanation_source = None
+            if args.explain or args.explain_llm:
                 print("Generating plain-language explanation...")
                 explain_payload = build_explain_payload(
                     results,
@@ -422,7 +434,12 @@ def main(argv: list[str] | None = None) -> int:
                     sample_plan,
                     args.fastq,
                 )
-                explanation = QwenModel(model_name=args.llm_model).generate(explain_payload)
+                explanation, explanation_source = generate_explanation(
+                    explain_payload,
+                    use_llm=args.explain_llm,
+                    model_name=args.llm_model,
+                )
+                print(f"Summary source: {explanation_source}")
 
             HtmlReport(
                 args.fastq,
@@ -431,6 +448,7 @@ def main(argv: list[str] | None = None) -> int:
                 plot_paths,
                 sample_plan=sample_plan,
                 explanation=explanation,
+                explanation_source=explanation_source,
             ).save(html_path)
 
         json_metrics = results

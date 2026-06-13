@@ -1,37 +1,75 @@
 from __future__ import annotations
 
+import re
 from abc import ABC, abstractmethod
 
 from fastq_scout.explain import build_explain_payload, payload_to_prompt_text
 
-SYSTEM_PROMPT = """You are the FastqScout assistant at the Bioinfomics laboratory.
+SYSTEM_PROMPT = (
+    "You are the FastqScout assistant for wet-lab scientists. "
+    "Write only in English. Use only facts from the JSON. Do not invent numbers. "
+    "Do not change the verdict. Keep plain language. Use exactly four ## headings."
+)
 
-Your audience: wet-lab biologists who are not bioinformaticians. They need a clear,
-reassuring, practical explanation of a pre-flight FASTQ QC report.
+USER_PROMPT_TEMPLATE = """Explain this FastqScout pre-flight QC report in simple English.
 
-Rules (strict):
-1. Do NOT change or question the verdict field in the JSON — treat it as final.
-2. Quote numbers ONLY from the JSON. Never invent metrics, percentages, or tool names.
-3. Do not claim the full file was analyzed if sampling shows only a fraction was read.
-4. Use plain language; briefly explain jargon (PHRED, Q20, adapter, duplicate rate).
-5. Structure your answer with these headings:
-   ## Краткий вывод
-   ## Что выглядит хорошо
-   ## На что обратить внимание
-   ## Что делать дальше
-6. Keep the answer under 350 words. Write in Russian.
-7. If data is missing, say so — do not guess.
-8. This is QC guidance, not a clinical or diagnostic conclusion."""
+Use ONLY numbers and facts from the JSON below.
+
+Format (exactly 4 sections):
+
+## Summary
+1–2 sentences: verdict + main issue or that the sample looks fine.
+
+## What looks good
+2–4 bullet points starting with "- ".
+
+## What to watch
+Bullet points from issues and metrics (adapter %, duplicates, quality drop).
+
+## Next steps
+Bullet points from recommendations.
+
+JSON:
+{payload_json}"""
+
+_BAD_PATTERNS = re.compile(
+    r"grammar fragment|DNA fragment member|chromosome member|"
+    r"геном|грамматик|фрагмент|член",
+    re.IGNORECASE,
+)
+
+_REQUIRED_HEADINGS = (
+    "## Summary",
+    "## Next steps",
+)
 
 
-USER_PROMPT_TEMPLATE = """Explain the following FastqScout report to a wet-lab scientist.
+def is_llm_response_usable(text: str, payload: dict) -> bool:
+    if not text or len(text) < 80:
+        return False
+    if _BAD_PATTERNS.search(text):
+        return False
 
-The verdict and all numbers below are authoritative. Your job is to translate them
-into plain language and practical next steps.
+    # Reject Cyrillic — we want English output only.
+    if re.search(r"[\u0400-\u04FF]", text):
+        return False
 
-```json
-{payload_json}
-```"""
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    if len(lines) != len(set(lines)) and len(lines) > 5:
+        from collections import Counter
+
+        counts = Counter(lines)
+        if any(c >= 3 for c in counts.values()):
+            return False
+
+    if not all(h in text for h in _REQUIRED_HEADINGS):
+        return False
+
+    verdict = payload.get("verdict", "")
+    if verdict and verdict not in text.upper():
+        return False
+
+    return True
 
 
 class BaseModel(ABC):
@@ -45,7 +83,7 @@ class BaseModel(ABC):
 
 
 class QwenModel(BaseModel):
-    def __init__(self, model_name: str = "Qwen/Qwen2.5-1.5B-Instruct"):
+    def __init__(self, model_name: str = "Qwen/Qwen2.5-0.5B-Instruct"):
         self.model_name = model_name
         self._model = None
         self._tokenizer = None
@@ -96,9 +134,9 @@ class QwenModel(BaseModel):
 
         generated_ids = self._model.generate(
             **model_inputs,
-            max_new_tokens=512,
+            max_new_tokens=400,
             do_sample=False,
+            repetition_penalty=1.15,
         )
         new_tokens = generated_ids[0][input_len:]
-        response = self._tokenizer.decode(new_tokens, skip_special_tokens=True).strip()
-        return response
+        return self._tokenizer.decode(new_tokens, skip_special_tokens=True).strip()

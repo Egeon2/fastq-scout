@@ -23,6 +23,7 @@ class HtmlReport:
         fastq_r2: Path | None = None,
         r2_metrics: dict | None = None,
         explanation: str | None = None,
+        explanation_source: str | None = None,
     ):
         self.fastq_path = fastq_path
         self.metrics = metrics
@@ -32,6 +33,7 @@ class HtmlReport:
         self.fastq_r2 = fastq_r2
         self.r2_metrics = r2_metrics or {}
         self.explanation = explanation
+        self.explanation_source = explanation_source
 
     def save(self, output_path: Path) -> Path:
         output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -782,10 +784,14 @@ class HtmlReport:
             return ""
 
         body = self._format_explanation_text(self.explanation)
+        if self.explanation_source == "llm":
+            hint = "AI-generated summary (Qwen). Numbers match the report above."
+        else:
+            hint = "Rule-based summary from report metrics. Numbers match the report above."
         return f"""
         <section>
             <h2>Plain-language summary</h2>
-            <p class="plot-hint">AI-generated explanation for wet-lab scientists (Qwen). Numbers match the report above.</p>
+            <p class="plot-hint">{html.escape(hint)}</p>
             <div class="explanation">{body}</div>
             <p class="explanation-disclaimer">This summary is for convenience only. Follow the verdict and recommendations above.</p>
         </section>"""

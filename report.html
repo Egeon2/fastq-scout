@@ -260,7 +260,7 @@
             <p>Input: <strong>SRR37361581_PMSS1_single_colony_isolate_1.fastq</strong></p>
             <p>Layout: <strong>single</strong> | Library: <strong>genome</strong></p>
 <p>Expected species: <strong>human</strong></p>
-            <p>Generated: 2026-06-13 20:35 UTC</p>
+            <p>Generated: 2026-06-13 20:43 UTC</p>
         </header>
 
         
@@ -387,6 +387,21 @@
         </section>
 
         
+        <section>
+            <h2>Plain-language summary</h2>
+            <p class="plot-hint">Rule-based summary from report metrics. Numbers match the report above.</p>
+            <div class="explanation"><h3>Summary</h3>
+<p>Verdict: TRIM. The sample needs preprocessing before main analysis — typically adapter and/or low-quality end trimming (e.g. fastp).<br>Analyzed 10,000 reads out of 11,387,076 in the file (0.09% sample) — layout: single, library: genome.</p>
+<h3>Genome composition (CpG O/E)</h3>
+<p>CpG O/E 0.78, mean GC 48.5% — high CpG O/E typical of unmethylated or prokaryotic / invertebrate-like DNA.<br>CpG O/E 0.78 outside expected range 0.15–0.35 for human; mean GC 48.5% outside typical range 38.0–48.0% for human<br>This is a composition hint, not species identification — use Kraken/sourmash for taxonomy.</p>
+<h3>What looks good</h3>
+<p>- R1: good average read quality (PHRED 34.07)<br>- R1: 100.0% of bases at Q≥20 (error rate ≤1%)<br>- R1: duplicate rate is acceptable (5.7%)</p>
+<h3>What to watch</h3>
+<p>- Quality drops at read tail (head 36.5 vs tail 31.0)<br>- GC distribution looks bimodal<br>- Adapter sequence detected on read tails (13.65%)<br>- Composition mismatch for --expected-species human: CpG O/E 0.78 outside expected range 0.15–0.35 for human; mean GC 48.5% outside typical range 38.0–48.0% for human<br>- R1: quality drops toward read ends (start ~36.48, tail ~31.02 PHRED)<br>- R1: Illumina TruSeq Universal detected on read tails (13.65% of reads) — trim before alignment<br>- R1: bimodal GC distribution — possible mix or contamination</p>
+<h3>Next steps</h3>
+<p>- Run fastp --cut_tail --cut_window_size 4 --cut_mean_quality 20<br>- Screen for contamination with Kraken or sourmash<br>- Run fastp --adapter_sequence GTCTGAACTCCAGTCAC  # Illumina TruSeq Universal<br>- Verify sample metadata and screen for contamination (Kraken, sourmash, or align to expected reference).</p></div>
+            <p class="explanation-disclaimer">This summary is for convenience only. Follow the verdict and recommendations above.</p>
+        </section>
 
         <section>
             <h2>QC plots</h2>
