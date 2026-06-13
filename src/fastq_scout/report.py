@@ -59,6 +59,8 @@ class HtmlReport:
         adapter_ref_seq = adapter.get("reference_sequence", "")
         base_content = self.metrics.get("Per base sequence content", {})
         base_summary = base_content.get("summary", {})
+        cpg = self.metrics.get("CpG O/E ratio", {})
+        composition = self.scout_report.get("composition", {})
 
         issues = self.scout_report.get("issues", [])
         recommendations = self.scout_report.get("recommendations", [])
@@ -67,6 +69,7 @@ class HtmlReport:
         sampling_section = self._sampling_section()
         adapter_section = self._adapter_section(adapter)
         r2_section = self._r2_summary_section()
+        composition_section = self._composition_section(cpg, composition, mean_gc)
         run_meta = self._run_meta_lines()
 
         return f"""<!DOCTYPE html>
@@ -370,8 +373,11 @@ class HtmlReport:
                 <div class="card-label">Duplicate rate</div>
                 <div class="card-value">{self._format_duplicate(duplicates)}</div>
             </div>
+            {self._cpg_card(cpg)}
             {self._nonstandard_base_cards(base_summary)}
         </div>
+
+        {composition_section}
 
         {self._adapter_cards_block(adapter, adapter_pct, adapter_trim, adapter_reference, adapter_ref_seq)}
 
@@ -532,9 +538,70 @@ class HtmlReport:
             f"<p>Layout: <strong>{html.escape(layout)}</strong> | "
             f"Library: <strong>{html.escape(library_type)}</strong></p>"
         ]
+        expected_species = self.scout_report.get("expected_species")
+        if expected_species:
+            lines.append(
+                f"<p>Expected species: <strong>{html.escape(expected_species)}</strong></p>"
+            )
         if self.fastq_r2 is not None:
             lines.append(f"<p>R2: <strong>{html.escape(str(self.fastq_r2))}</strong></p>")
         return "\n".join(lines)
+
+    def _cpg_card(self, cpg: dict) -> str:
+        ratio = cpg.get("cpg_oe_ratio")
+        if ratio is None:
+            return ""
+        return f"""<div class="card">
+                <div class="card-label">CpG O/E ratio</div>
+                <div class="card-value">{ratio}</div>
+                <div class="card-label">observed / expected CG dinucleotides</div>
+            </div>"""
+
+    def _composition_section(self, cpg: dict, composition: dict, mean_gc) -> str:
+        if not cpg and not composition:
+            return ""
+
+        ratio = cpg.get("cpg_oe_ratio")
+        if ratio is None and not composition:
+            return ""
+
+        summary = composition.get("summary") or ""
+        if not summary and ratio is not None:
+            from fastq_scout.species_composition import composition_summary
+
+            summary = composition_summary(ratio, mean_gc)
+        disclaimer = composition.get(
+            "disclaimer",
+            "Composition hint only — not taxonomic identification.",
+        )
+        species_check = composition.get("expected_species_check", {})
+        check_html = ""
+        if species_check.get("message"):
+            status = species_check.get("status", "")
+            style = "color: #c0392b;" if status == "mismatch" else "color: #1e8449;"
+            check_html = (
+                f'<p style="{style}"><strong>Expected species check:</strong> '
+                f"{html.escape(species_check['message'])}</p>"
+            )
+        elif species_check.get("status") == "skipped_transcriptome":
+            check_html = f"<p>{html.escape(species_check['message'])}</p>"
+
+        library_type = self.scout_report.get("library_type", "genome")
+        transcriptome_note = ""
+        if library_type == "transcriptome":
+            transcriptome_note = (
+                "<p><em>CpG O/E on transcriptome reads reflects transcript composition, "
+                "not whole-genome averages — interpret cautiously.</em></p>"
+            )
+
+        return f"""
+        <section>
+            <h2>Genome composition hint</h2>
+            {transcriptome_note}
+            <p>{html.escape(summary)}</p>
+            {check_html}
+            <p class="plot-hint">{html.escape(disclaimer)}</p>
+        </section>"""
 
     def _r2_summary_section(self) -> str:
         if not self.r2_metrics:
@@ -798,7 +865,10 @@ def build_plot_paths(
 
     plot_paths = {}
     for metric_name, data in metrics.items():
-        plot_path = MetricPlotter(metric_name, data).plot(output_dir)
+        try:
+            plot_path = MetricPlotter(metric_name, data).plot(output_dir)
+        except ValueError:
+            continue
         if name_suffix:
             renamed = plot_path.with_name(f"{plot_path.stem}{name_suffix}{plot_path.suffix}")
             plot_path.rename(renamed)

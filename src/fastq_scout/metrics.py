@@ -2,6 +2,7 @@ from abc import ABC, abstractmethod
 
 from fastq_scout.adapter_searching import count_kmers_in_seq, discover_adapters
 from fastq_scout.nucleotides import IUPAC_AMBIGUOUS, TRACKED_BASES, classify_base
+from fastq_scout.species_composition import classify_composition, compute_cpg_oe, count_cpg_dinucleotides
 
 
 class BaseMetric(ABC):
@@ -273,3 +274,51 @@ class AdapterDiscovery(BaseMetric):
             self._middle_kmers,
             references=references,
         )
+
+
+class CpGObservedExpected(BaseMetric):
+    def __init__(self):
+        self._c_count = 0
+        self._g_count = 0
+        self._cpg_observed = 0
+        self._total_bases = 0
+
+    @property
+    def name(self):
+        return "CpG O/E ratio"
+
+    def update(self, chunk):
+        for read in chunk:
+            seq = read.sequence.upper()
+            self._c_count += seq.count("C")
+            self._g_count += seq.count("G")
+            self._cpg_observed += count_cpg_dinucleotides(seq)
+            self._total_bases += read.length
+
+    def result(self):
+        if self._total_bases == 0:
+            return {
+                "cpg_oe_ratio": 0.0,
+                "cpg_observed": 0,
+                "cpg_expected": 0.0,
+                "total_bases": 0,
+                "composition_class": "unknown",
+            }
+
+        expected = (self._c_count * self._g_count) / self._total_bases
+        cpg_oe = compute_cpg_oe(
+            self._c_count,
+            self._g_count,
+            self._cpg_observed,
+            self._total_bases,
+        )
+
+        return {
+            "cpg_oe_ratio": round(cpg_oe, 3),
+            "cpg_observed": self._cpg_observed,
+            "cpg_expected": round(expected, 1),
+            "total_bases": self._total_bases,
+            "c_count": self._c_count,
+            "g_count": self._g_count,
+            "composition_class": classify_composition(cpg_oe),
+        }

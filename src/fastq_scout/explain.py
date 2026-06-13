@@ -45,6 +45,7 @@ def _summarize_read(metrics: dict, label: str = "R1") -> dict:
     gc = metrics.get("GC content", {})
     base_content = metrics.get("Per base sequence content", {})
     adapter = metrics.get("Adapter discovery", {})
+    cpg = metrics.get("CpG O/E ratio", {})
 
     summary = {
         "read_label": label,
@@ -59,6 +60,8 @@ def _summarize_read(metrics: dict, label: str = "R1") -> dict:
         "duplicate_pct": metrics.get("Duplicates rate"),
         "quality_profile": _quality_profile(quality),
         "gc_profile": _gc_profile(gc),
+        "cpg_oe_ratio": cpg.get("cpg_oe_ratio"),
+        "composition_class": cpg.get("composition_class"),
         "base_content_summary": base_content.get("summary", {}),
     }
 
@@ -106,9 +109,11 @@ def build_explain_payload(
         "input_fastq": fastq_path.name,
         "layout": scout_report.get("layout", sample_plan.get("layout", "single")),
         "library_type": scout_report.get("library_type", sample_plan.get("library_type", "genome")),
+        "expected_species": scout_report.get("expected_species"),
         "verdict": scout_report.get("verdict"),
         "issues": scout_report.get("issues", []),
         "recommendations": scout_report.get("recommendations", []),
+        "composition": scout_report.get("composition", {}),
         "sampling": sampling,
         "reads": reads,
     }

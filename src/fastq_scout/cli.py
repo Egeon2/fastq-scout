@@ -13,6 +13,7 @@ from fastq_scout.metrics import (
     DuplicateRate,
     PerSequenceQuality,
     AdapterDiscovery,
+    CpGObservedExpected,
 )
 from fastq_scout.pipeline import Pipeline
 from fastq_scout.profiles import effective_min_reads
@@ -122,9 +123,23 @@ def build_parser() -> argparse.ArgumentParser:
         help="Sampling mode: base or with_adapter (default: base)",
     )
     parser.add_argument(
+        "--expected-species",
+        choices=["human", "mouse", "drosophila", "ecoli"],
+        default=None,
+        help=(
+            "Optional metadata sanity check: warn if CpG O/E and GC "
+            "do not match typical genome composition for this species"
+        ),
+    )
+    parser.add_argument(
         "--explain",
         action="store_true",
         help="Add a plain-language LLM summary to the HTML report (loads Qwen locally)",
+    )
+    parser.add_argument(
+        "--llm-model",
+        default="Qwen/Qwen2.5-0.5B-Instruct",
+        help="Hugging Face model for --explain (default: Qwen2.5-0.5B-Instruct)",
     )
     return parser
 
@@ -137,6 +152,7 @@ def _build_metrics(mode: str, read_label: str) -> list:
         GCContent(),
         PerBaseSequenceContent(),
         DuplicateRate(),
+        CpGObservedExpected(),
     ]
     if mode == "with_adapter":
         adapter_set = "universal" if read_label == "R1" else "read2"
@@ -163,6 +179,22 @@ def _print_adapter_summary(results: dict, read_label: str = "") -> None:
         print(f"{prefix}  full reference:      {ref_seq}")
     elif trim_seq:
         print(f"{prefix}  detected motif:      {trim_seq}")
+
+
+def _print_composition_summary(results: dict, scout_report: dict, read_label: str = "") -> None:
+    cpg = results.get("CpG O/E ratio", {})
+    ratio = cpg.get("cpg_oe_ratio")
+    if ratio is None:
+        return
+
+    prefix = f"[{read_label}] " if read_label else ""
+    print(f"{prefix}CpG O/E ratio: {ratio} (observed/expected CG dinucleotides)")
+    composition = scout_report.get("composition", {})
+    if composition.get("summary"):
+        print(f"{prefix}  {composition['summary']}")
+    species_check = composition.get("expected_species_check", {})
+    if species_check.get("message"):
+        print(f"{prefix}  Species check: {species_check['message']}")
 
 
 def _build_sample_plan(
@@ -265,6 +297,8 @@ def main(argv: list[str] | None = None) -> int:
     html_path = args.output or args.fastq.with_name(f"{args.fastq.stem}_scout.html")
 
     print(f"Layout: {ctx.layout} | Library: {ctx.library_type}")
+    if ctx.expected_species:
+        print(f"Expected species (composition check): {ctx.expected_species}")
 
     if ctx.is_paired:
         plan_r1, sample_budget_r1 = _build_sample_plan(args, ctx, args.fastq)
@@ -287,6 +321,7 @@ def main(argv: list[str] | None = None) -> int:
         verdict, scout_report = scout.result_paired(results_r1, results_r2)
         _print_adapter_summary(results_r1, "R1")
         _print_adapter_summary(results_r2, "R2")
+        _print_composition_summary(results_r1, scout_report, "R1")
 
         combined_plan = {
             "layout": ctx.layout,
@@ -320,7 +355,7 @@ def main(argv: list[str] | None = None) -> int:
                     args.fastq,
                     r2_metrics=results_r2,
                 )
-                explanation = QwenModel().generate(explain_payload)
+                explanation = QwenModel(model_name=args.llm_model).generate(explain_payload)
 
             HtmlReport(
                 args.fastq,
@@ -364,6 +399,7 @@ def main(argv: list[str] | None = None) -> int:
             _print_adapter_summary(results)
         else:
             print("Adapter detection: off (use --mode with_adapter to enable)")
+        _print_composition_summary(results, scout_report)
 
         with tempfile.TemporaryDirectory(prefix="fastq_scout_") as temp_dir:
             plot_paths = build_plot_paths(results, Path(temp_dir))
@@ -386,7 +422,7 @@ def main(argv: list[str] | None = None) -> int:
                     sample_plan,
                     args.fastq,
                 )
-                explanation = QwenModel().generate(explain_payload)
+                explanation = QwenModel(model_name=args.llm_model).generate(explain_payload)
 
             HtmlReport(
                 args.fastq,
@@ -408,6 +444,7 @@ def main(argv: list[str] | None = None) -> int:
                     "run": {
                         "layout": ctx.layout,
                         "library_type": ctx.library_type,
+                        "expected_species": ctx.expected_species,
                     },
                     "sampling": json_sampling,
                     "metrics": json_metrics,

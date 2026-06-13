@@ -2,6 +2,11 @@ from abc import ABC, abstractmethod
 
 from fastq_scout.profiles import ScoutProfile, get_scout_profile
 from fastq_scout.run_context import RunContext
+from fastq_scout.species_composition import (
+    COMPOSITION_DISCLAIMER,
+    assess_expected_species,
+    composition_summary,
+)
 
 
 class Scout(ABC):
@@ -163,6 +168,28 @@ class FastqScout(Scout):
             issues.append(f"{prefix}Low-level adapter signal detected ({adapter_pct}%)")
             recommendations.append(f"Consider trimming: fastp {fastp_flag}  # {label}")
 
+        cpg = metrics.get("CpG O/E ratio", {})
+        cpg_oe = cpg.get("cpg_oe_ratio")
+        if cpg_oe is not None and self.ctx and not self.ctx.is_transcriptome:
+            if self.ctx.expected_species:
+                assessment = assess_expected_species(
+                    cpg_oe,
+                    mean_gc,
+                    self.ctx.expected_species,
+                    library_type=self.ctx.library_type,
+                )
+                if assessment.get("mismatch"):
+                    issues.append(f"{prefix}{assessment['issue']}")
+                    recommendations.append(assessment["recommendation"])
+            elif cpg_oe >= 0.85 and mean_gc is not None and mean_gc >= 45:
+                issues.append(
+                    f"{prefix}High CpG O/E ({cpg_oe:.2f}) — profile resembles "
+                    "unmethylated or prokaryotic DNA, not mammalian genome"
+                )
+                recommendations.append(
+                    "Screen for contamination (Kraken, sourmash, or align to expected reference)"
+                )
+
         if overall_mean < 20:
             partial = "REJECT"
         elif duplicates > profile.duplicate_reject and profile.reject_on_high_duplicates:
@@ -192,8 +219,36 @@ class FastqScout(Scout):
             "recommendations": _dedupe_preserve_order(recommendations),
             "library_type": self.ctx.library_type if self.ctx else "genome",
             "layout": self.ctx.layout if self.ctx else "single",
+            "expected_species": self.ctx.expected_species if self.ctx else None,
+            "composition": self._composition_block(metrics),
         }
         return verdict, report
+
+    def _composition_block(self, metrics: dict) -> dict:
+        cpg = metrics.get("CpG O/E ratio", {})
+        cpg_oe = cpg.get("cpg_oe_ratio")
+        if cpg_oe is None:
+            return {}
+
+        gc = metrics.get("GC content", {})
+        mean_gc = gc.get("mean_gc")
+        block = {
+            "cpg_oe_ratio": cpg_oe,
+            "mean_gc": mean_gc,
+            "composition_class": cpg.get("composition_class"),
+            "summary": composition_summary(cpg_oe, mean_gc),
+            "disclaimer": COMPOSITION_DISCLAIMER,
+        }
+
+        if self.ctx and self.ctx.expected_species:
+            block["expected_species_check"] = assess_expected_species(
+                cpg_oe,
+                mean_gc,
+                self.ctx.expected_species,
+                library_type=self.ctx.library_type if self.ctx else "genome",
+            )
+
+        return block
 
     def result_paired(
         self,
@@ -211,6 +266,8 @@ class FastqScout(Scout):
             "recommendations": _dedupe_preserve_order(recs_r1 + recs_r2),
             "library_type": self.ctx.library_type if self.ctx else "genome",
             "layout": "paired",
+            "expected_species": self.ctx.expected_species if self.ctx else None,
+            "composition": self._composition_block(metrics_r1),
             "R1": {"verdict": verdict_r1},
             "R2": {"verdict": verdict_r2},
         }
