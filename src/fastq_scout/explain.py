@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 
@@ -224,6 +225,208 @@ def _read_concern_points(read: dict) -> list[str]:
     return points
 
 
+def _metrics_for_plot_title(
+    plot_title: str,
+    metrics_r1: dict,
+    metrics_r2: dict | None,
+) -> tuple[str, dict]:
+    """Return (read label, metrics dict) for a report plot title."""
+    title = plot_title
+    label = "R1"
+    if title.startswith("R2: "):
+        label = "R2"
+        title = title[4:]
+        source = metrics_r2 or {}
+    else:
+        source = metrics_r1
+
+    if title == "Duplicate rate":
+        title = "Duplicates rate"
+    elif title == "Adapter enrichment":
+        title = "Adapter discovery"
+
+    return label, source
+
+
+def _caption_per_position_quality(quality: dict, label: str) -> str:
+    overall = quality.get("overall_mean")
+    qp = _quality_profile(quality)
+    parts = [
+        f"This chart shows the average base quality (PHRED score) at each position along the "
+        f"{label} reads — higher is better; PHRED 30 means roughly 1 error per 1,000 bases.",
+    ]
+    if overall is not None:
+        parts.append(f"The overall mean quality is {overall}.")
+    tail_drop = qp.get("tail_drop_phred", 0)
+    if tail_drop and tail_drop >= 5:
+        parts.append(
+            f"Quality falls toward the read ends (about {qp.get('head_mean_first_10bp')} at the "
+            f"start vs {qp.get('tail_mean_last_20pct')} near the tail) — trimming low-quality "
+            f"ends often helps before alignment."
+        )
+    elif tail_drop is not None and tail_drop < 3:
+        parts.append("Quality stays fairly stable along the read — no strong end decay.")
+    return " ".join(parts)
+
+
+def _caption_per_sequence_quality(seq_quality: dict, label: str) -> str:
+    q20 = seq_quality.get("q20_pct")
+    q30 = seq_quality.get("q30_pct")
+    parts = [
+        f"This histogram summarizes the average quality of whole {label} reads. "
+        f"Q20 and Q30 tell you what fraction of bases meet common quality cutoffs "
+        f"(≤1% and ≤0.1% error rate)."
+    ]
+    if q20 is not None and q30 is not None:
+        parts.append(f"In this sample, {q20}% of bases are Q≥20 and {q30}% are Q≥30.")
+    if q20 is not None and q20 >= 90:
+        parts.append("Most bases pass typical Q20 filters — good for standard pipelines.")
+    elif q20 is not None and q20 < 80:
+        parts.append("A sizable fraction of bases are below Q20 — consider trimming or filtering.")
+    return " ".join(parts)
+
+
+def _caption_length_distribution(length: dict, label: str) -> str:
+    mean_len = length.get("mean_length")
+    min_len = length.get("min_length")
+    max_len = length.get("max_length")
+    parts = [
+        f"This plot shows how long the {label} reads are. "
+        f"Unexpectedly short reads can mean adapter dimers or library problems."
+    ]
+    if mean_len is not None:
+        parts.append(f"Mean read length is {mean_len} bp")
+        if min_len is not None and max_len is not None:
+            parts.append(f"(range {min_len}–{max_len} bp).")
+        else:
+            parts.append(".")
+    return " ".join(parts)
+
+
+def _caption_gc_content(gc: dict, label: str) -> str:
+    profile = _gc_profile(gc)
+    mean_gc = profile.get("mean_gc")
+    parts = [
+        f"GC content is the percentage of G and C bases in each {label} read. "
+        f"Most genomes have a characteristic GC profile — odd shapes can hint at contamination or mixed libraries."
+    ]
+    if mean_gc is not None:
+        parts.append(f"Mean GC here is {mean_gc}%.")
+    if profile.get("shape") == "bimodal":
+        parts.append(
+            "The distribution has two peaks (bimodal) — worth checking whether the sample "
+            "or metadata matches what you expect."
+        )
+    else:
+        parts.append("The distribution looks single-peaked (unimodal).")
+    return " ".join(parts)
+
+
+def _caption_base_content(base_content: dict, label: str) -> str:
+    summary = base_content.get("summary", {})
+    mean_n = summary.get("mean_n_pct", 0)
+    parts = [
+        f"This chart tracks A, T, G, C (and N / other symbols) across read positions for {label}. "
+        f"Flat lines are normal; spikes in N mean base-calling problems at those cycles."
+    ]
+    if mean_n and mean_n > 1:
+        parts.append(f"Unknown bases (N) average {mean_n}% — filtering or trimming may be needed.")
+    else:
+        parts.append("N content looks low — base composition is stable.")
+    return " ".join(parts)
+
+
+def _caption_duplicates(rate, label: str) -> str:
+    parts = [
+        f"Duplicate rate estimates how many {label} reads are identical or near-identical "
+        f"(often from PCR over-amplification or very high sequencing depth)."
+    ]
+    if rate is not None:
+        parts.append(f"Here it is {rate}%.")
+    if rate is not None and rate < 20:
+        parts.append("This level is usually acceptable for whole-genome work.")
+    elif rate is not None and rate >= 30:
+        parts.append("High duplicates can skew variant and expression calls — deduplication may help.")
+    else:
+        parts.append("Moderate duplication — note it when interpreting downstream results.")
+    return " ".join(parts)
+
+
+def _caption_adapter(adapter: dict, label: str) -> str:
+    if not adapter:
+        return (
+            f"Adapter enrichment was not run for {label}. "
+            f"Re-run FastqScout with --mode with_adapter to scan read tails for sequencing adapters."
+        )
+    pct = adapter.get("adapter_content_pct", 0)
+    name = adapter.get("reference_name") or "a sequencing adapter"
+    parts = [
+        f"This plot shows how often adapter sequence appears on {label} read tails. "
+        f"Adapters are lab oligos that should be removed before mapping reads to a genome."
+    ]
+    parts.append(f"{name} was detected on about {pct}% of tails.")
+    if pct >= 5:
+        parts.append("Trim these with fastp (or similar) using the suggested sequence in the report.")
+    elif pct >= 0.5:
+        parts.append("Signal is low but present — trimming is optional but often still worthwhile.")
+    else:
+        parts.append("Little or no adapter signal — trimming may not be necessary.")
+    return " ".join(parts)
+
+
+def _caption_for_metric(metric_name: str, metrics: dict, label: str) -> str:
+    if metric_name == "Per position quality":
+        return _caption_per_position_quality(metrics.get("Per position quality", {}), label)
+    if metric_name == "Per sequence quality scores":
+        return _caption_per_sequence_quality(metrics.get("Per sequence quality scores", {}), label)
+    if metric_name == "Length distribution":
+        return _caption_length_distribution(metrics.get("Length distribution", {}), label)
+    if metric_name == "GC content":
+        return _caption_gc_content(metrics.get("GC content", {}), label)
+    if metric_name == "Per base sequence content":
+        return _caption_base_content(metrics.get("Per base sequence content", {}), label)
+    if metric_name == "Duplicates rate":
+        return _caption_duplicates(metrics.get("Duplicates rate"), label)
+    if metric_name == "Adapter discovery":
+        return _caption_adapter(metrics.get("Adapter discovery", {}), label)
+    return ""
+
+
+def build_plot_captions(
+    metrics_r1: dict,
+    plot_titles: list[str],
+    metrics_r2: dict | None = None,
+) -> dict[str, str]:
+    """Plain-language captions keyed by report plot title (always English)."""
+    captions: dict[str, str] = {}
+    for plot_title in plot_titles:
+        label, source = _metrics_for_plot_title(plot_title, metrics_r1, metrics_r2)
+        title = plot_title[4:] if plot_title.startswith("R2: ") else plot_title
+        if title == "Duplicate rate":
+            metric_name = "Duplicates rate"
+        elif title == "Adapter enrichment":
+            metric_name = "Adapter discovery"
+        else:
+            metric_name = title
+        caption = _caption_for_metric(metric_name, source, label)
+        if caption:
+            captions[plot_title] = caption
+    return captions
+
+
+_VERDICT_EXTRA = {
+    "PROCEED": (
+        "In practice, you can hand this FASTQ to your usual pipeline without mandatory cleanup."
+    ),
+    "TRIM": (
+        "Plan a trimming step (usually fastp) before alignment — the plots below show what to fix."
+    ),
+    "REJECT": (
+        "Do not start a long downstream run until you understand why quality failed."
+    ),
+}
+
+
 def build_template_explanation(payload: dict) -> str:
     """Rule-based plain-language summary — reliable without LLM."""
     verdict = payload.get("verdict", "UNKNOWN")
@@ -237,7 +440,14 @@ def build_template_explanation(payload: dict) -> str:
     lines = ["## Summary", ""]
 
     verdict_line = _VERDICT_TEXT.get(verdict, f"FastqScout verdict: {verdict}.")
+    extra = _VERDICT_EXTRA.get(verdict, "")
     lines.append(f"Verdict: {verdict}. {verdict_line}")
+    if extra:
+        lines.append(extra)
+    lines.append(
+        "This is a quick pre-flight check on a sample of reads — use it to catch adapter, "
+        "quality, or metadata problems before expensive analysis."
+    )
 
     if reads_analyzed and total_reads and fraction is not None:
         lines.append(
@@ -258,8 +468,15 @@ def build_template_explanation(payload: dict) -> str:
             "This is a composition hint, not species identification — "
             "use Kraken/sourmash for taxonomy."
         )
+        lines.append(
+            "CpG O/E compares observed CG dinucleotides to random expectation — "
+            "mammalian genomes are often depleted (~0.2); bacteria and some invertebrates are closer to 1.0."
+        )
 
     lines.extend(["", "## What looks good", ""])
+    lines.append(
+        "These metrics passed basic checks and support continuing — they do not mean the sample is perfect."
+    )
     good = []
     for read in payload.get("reads", []):
         good.extend(_read_good_points(read))
@@ -269,17 +486,19 @@ def build_template_explanation(payload: dict) -> str:
         lines.append("- Few strong positives in the metrics — see Issues above.")
 
     lines.extend(["", "## What to watch", ""])
+    lines.append(
+        "Each point below may affect mapping or variant calls if left unaddressed."
+    )
     concerns = list(payload.get("issues", []))
-    for read in payload.get("reads", []):
-        for point in _read_concern_points(read):
-            if point not in concerns:
-                concerns.append(point)
     if concerns:
         lines.extend(f"- {c}" for c in concerns)
     else:
         lines.append("- No major issues detected.")
 
     lines.extend(["", "## Next steps", ""])
+    lines.append(
+        "Follow these in order; share this report with bioinformatics if anything is unclear."
+    )
     recs = payload.get("recommendations", [])
     if recs:
         lines.extend(f"- {r}" for r in recs)
@@ -291,6 +510,82 @@ def build_template_explanation(payload: dict) -> str:
         lines.append("- Discuss the result with bioinformatics or your core facility.")
 
     return "\n".join(lines)
+
+
+def extract_key_facts(payload: dict) -> list[str]:
+    """Numbers and labels the LLM must preserve (for validation)."""
+    facts: list[str] = []
+    verdict = payload.get("verdict")
+    if verdict:
+        facts.append(verdict)
+
+    for read in payload.get("reads", []):
+        for key in ("mean_quality_phred", "q20_pct", "q30_pct", "duplicate_pct"):
+            val = read.get(key)
+            if val is not None:
+                facts.append(str(val))
+        adapter = read.get("adapter") or {}
+        pct = adapter.get("adapter_content_pct")
+        if pct is not None:
+            facts.append(str(pct))
+
+    composition = payload.get("composition", {})
+    cpg_oe = composition.get("cpg_oe_ratio")
+    if cpg_oe is not None:
+        facts.append(str(cpg_oe))
+
+    sampling = payload.get("sampling", {})
+    fraction = sampling.get("sample_fraction_pct")
+    if fraction is not None:
+        facts.append(str(fraction))
+
+    return facts
+
+
+_BAD_LLM_PATTERNS = re.compile(
+    r"grammar fragment|DNA fragment member|chromosome member|"
+    r"as an AI|I cannot|I'm sorry",
+    re.IGNORECASE,
+)
+
+_REQUIRED_LLM_HEADINGS = (
+    "## Summary",
+    "## What looks good",
+    "## What to watch",
+    "## Next steps",
+)
+
+
+def is_llm_response_usable(text: str, payload: dict) -> bool:
+    if not text or len(text) < 100:
+        return False
+    if _BAD_LLM_PATTERNS.search(text):
+        return False
+    if re.search(r"[\u0400-\u04FF]", text):
+        return False
+
+    if not all(h in text for h in _REQUIRED_LLM_HEADINGS):
+        return False
+
+    verdict = payload.get("verdict", "")
+    if verdict and verdict not in text.upper():
+        return False
+
+    facts = extract_key_facts(payload)
+    if facts:
+        hits = sum(1 for fact in facts if fact in text)
+        if hits < max(2, len(facts) // 2):
+            return False
+
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    if len(lines) > 5:
+        from collections import Counter
+
+        counts = Counter(lines)
+        if any(c >= 3 for c in counts.values()):
+            return False
+
+    return True
 
 
 def generate_explanation(
@@ -307,10 +602,10 @@ def generate_explanation(
     if not use_llm:
         return template, "template"
 
-    from fastq_scout.qween_model import QwenModel, is_llm_response_usable
+    from fastq_scout.qween_model import QwenModel
 
     try:
-        llm_text = QwenModel(model_name=model_name).generate(payload)
+        llm_text = QwenModel(model_name=model_name).generate(payload, template=template)
         if is_llm_response_usable(llm_text, payload):
             return llm_text, "llm"
         print("LLM output looked unreliable — using rule-based summary instead.")

@@ -3,6 +3,8 @@ import html
 from datetime import datetime, timezone
 from pathlib import Path
 
+from fastq_scout.explain import build_plot_captions
+
 
 VERDICT_STYLES = {
     "PROCEED": ("#1e8449", "#eafaf1", "Sample looks good — you can proceed with downstream analysis."),
@@ -260,6 +262,16 @@ class HtmlReport:
             color: var(--muted);
             font-size: 0.9rem;
         }}
+        .plot-caption {{
+            color: var(--text);
+            font-size: 0.92rem;
+            line-height: 1.6;
+            margin: 12px 0 0;
+            padding: 12px 14px;
+            background: #f4f6f7;
+            border-left: 3px solid var(--accent);
+            border-radius: 0 6px 6px 0;
+        }}
         .plot-modal {{
             display: none;
             position: fixed;
@@ -401,7 +413,7 @@ class HtmlReport:
 
         <section>
             <h2>QC plots</h2>
-            <p class="plot-hint">Click any plot to open it full size.</p>
+            <p class="plot-hint">Click any plot to open it full size. Plain-language notes under each chart explain what you are looking at.</p>
             <div class="plots">
                 {self._plots_block()}
             </div>
@@ -820,16 +832,27 @@ class HtmlReport:
         if not self.plot_paths:
             return '<p class="empty">No plots available.</p>'
 
+        captions = build_plot_captions(
+            self.metrics,
+            list(self.plot_paths.keys()),
+            self.r2_metrics or None,
+        )
+
         blocks = []
         for title, path in self.plot_paths.items():
             plot_id = self._plot_id(title)
             encoded = base64.b64encode(path.read_bytes()).decode("ascii")
+            caption = captions.get(title, "")
+            caption_html = (
+                f'<p class="plot-caption">{html.escape(caption)}</p>' if caption else ""
+            )
             blocks.append(
                 f"""<div class="plot-card">
                     <h3>{html.escape(title)}</h3>
                     <a href="#{plot_id}">
                         <img src="data:image/png;base64,{encoded}" alt="{html.escape(title)}">
                     </a>
+                    {caption_html}
                 </div>"""
             )
         return "\n".join(blocks)
